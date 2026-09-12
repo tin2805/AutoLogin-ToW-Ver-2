@@ -183,6 +183,10 @@ class StepTimeoutException(Exception):
     """Ném ra khi không tìm thấy bước tiếp theo trong vòng 30s do game bị treo hoặc mất phản hồi."""
     pass
 
+class CloneNotFoundException(Exception):
+    """Ném ra khi không tìm thấy đúng tên clone trên màn hình chọn nhân vật."""
+    pass
+
 def kill_game_process(proc=None, pid=None, hwnd=None):
     """Đóng sạch tiến trình game ToW khi bị treo hoặc cần khởi động lại."""
     try:
@@ -584,12 +588,15 @@ def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logge
         click_y = wy + best_y
         logger(f'[{email}] 🎯 Tìm thấy tên [{target_char}] (khớp với "{best_word}"). Đang nhấp vào Avatar kế bên tại ({avatar_x}, {click_y})...')
         click_coords(avatar_x, click_y, delay=1.2, hwnd=hwnd, extra_delay=extra_delay)
-    else:
+    elif not t_name or t_name.startswith('clone'):
         # Sử dụng vị trí theo số thứ tự clone
         slot_idx = clone_idx % len(fallback_y_ratios)
         click_y = wy + int(wh * fallback_y_ratios[slot_idx])
         logger(f'[{email}] ℹ️ Không nhận diện được tên cụ thể, nhấp Avatar #{slot_idx+1} theo thứ tự tại ({avatar_x}, {click_y})...')
         click_coords(avatar_x, click_y, delay=1.2, hwnd=hwnd, extra_delay=extra_delay)
+    else:
+        logger(f'[{email}] ❌ Không tìm thấy clone [{target_char}] trên danh sách nhân vật.')
+        return False
 
     time.sleep(1.0 + extra_delay)
     logger(f'[{email}] ✅ Đã nhấp chọn Avatar nhân vật xong!')
@@ -813,10 +820,17 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
         logger(f'[{email}] ⏭️ Bỏ qua bước Đăng xuất/Đăng nhập — cùng tài khoản, tiếp tục chọn nhân vật tiếp theo...')
         activate_window(hwnd)
         step_pause("chờ cửa sổ game clone tiếp theo ổn định")
-        # Đóng notice nếu có
-        match_n = locate_template_in_window(hwnd, 'notice_close', threshold=0.70)
-        if match_n:
-            click_coords(match_n[0], match_n[1], delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
+        # Clone mới luôn có thể hiện Notice sau khi cửa sổ đã ổn định; chờ ngắn để bắt popup xuất hiện.
+        notice_wait_start = time.time()
+        while time.time() - notice_wait_start < 10.0:
+            if stop_event and stop_event.is_set():
+                return False, proc, pid, hwnd
+            match_n = locate_template_in_window(hwnd, 'notice_close', threshold=0.70)
+            if match_n:
+                logger(f'[{email}] 📌 Clone mới xuất hiện bảng thông báo. Đang bấm tắt [X]...')
+                click_coords(match_n[0], match_n[1], delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
+                time.sleep(0.5)
+                break
             time.sleep(0.5)
 
         # [FIX 2c] Chờ màn hình chọn nhân vật / Start Adventure xuất hiện trước khi tiếp tục
@@ -932,7 +946,7 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
 
     # 3. Ở MÀN HÌNH NÀY: NHẤP VÀO AVATAR KẾ BÊN TÊN NHÂN VẬT TRƯỚC, SAU ĐÓ MỚI BẤM START ADVENTURE!
     if is_char_screen:
-        select_character_avatar_in_list(
+        character_selected = select_character_avatar_in_list(
             hwnd=hwnd,
             email=email,
             target_char=target_char,
@@ -941,6 +955,8 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
             stop_event=stop_event,
             extra_delay=extra_delay
         )
+        if not character_selected and target_char and not target_char.lower().startswith('clone'):
+            raise CloneNotFoundException(f'Không tìm thấy clone [{target_char}]')
         if stop_event and stop_event.is_set():
             return False, proc, pid, hwnd
 
@@ -1018,6 +1034,15 @@ def auto_login_flow(account, clone_exe, stop_event=None, logger=print, index=0, 
                 logger(f'[{email}] ❌ Đã thử khởi động lại {max_retries} lần nhưng không qua được bước tiếp theo. Bỏ qua tài khoản này.')
                 kill_game_process(proc, pid, hwnd)
                 return False
+        except CloneNotFoundException as e:
+            logger(f'[{email}] ❌ {e}. Đánh dấu clone là "không tìm thấy clone" và bỏ qua clone này.')
+            clone_ref = account.get('_clone_ref')
+            if clone_ref is not None:
+                clone_ref['status'] = 'không tìm thấy clone'
+            logger(f'[{email}] 🛑 Đang đóng tab game của clone lỗi (HWND: {hwnd}, PID: {pid})...')
+            kill_game_process(proc, pid, hwnd)
+            logger(f'[{email}] ✅ Đã đóng tab game của clone lỗi.')
+            return False
         except Exception as e:
             logger(f'[{email}] ❌ Lỗi phát sinh trong quá trình đăng nhập: {e}')
             kill_game_process(proc, pid, hwnd)
@@ -1052,6 +1077,7 @@ def auto_login_flow_grouped(account, clones, clone_exe, stop_event=None, logger=
         task_acc['server'] = clone.get('server') or account.get('server', '')
         task_acc['_clone_name'] = clone.get('name', '')
         task_acc['_clone_server'] = clone.get('server', '')
+        task_acc['_clone_ref'] = clone
 
         is_first_clone = (clone_offset == 0)
         run_index = base_index + clone_offset

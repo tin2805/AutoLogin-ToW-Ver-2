@@ -1436,6 +1436,8 @@ class TowAutoApp(tk.Tk):
                 for c, ok in zip(selected_clones, results):
                     if ok:
                         c['status'] = '✅ Đã vào game'
+                    elif c.get('status') == 'không tìm thấy clone':
+                        c['status'] = 'không tìm thấy clone'
                     elif self.stop_event.is_set():
                         c['status'] = '⏹ Đã dừng'
                     else:
@@ -1443,13 +1445,13 @@ class TowAutoApp(tk.Tk):
 
                 # Update account row status summary
                 ok_count = sum(1 for ok in results if ok)
-                total_c = len(results)
+                total_c = len(selected_clones)
                 if ok_count == total_c:
                     row_status = f'✅ {ok_count}/{total_c} clone đã vào game'
                 elif ok_count == 0:
-                    row_status = f'❌ 0/{total_c} clone thất bại'
+                    row_status = f'❌ 0/{total_c} clone đã vào game'
                 else:
-                    row_status = f'⚠️ {ok_count}/{total_c} clone thành công'
+                    row_status = f'⚠️ {ok_count}/{total_c} clone đã vào game'
                 self.update_account_status(orig_idx, row_status, mode)
 
                 base_run_idx += len(selected_clones)
