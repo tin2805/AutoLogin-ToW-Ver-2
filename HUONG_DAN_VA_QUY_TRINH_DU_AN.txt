@@ -1,0 +1,162 @@
+================================================================================
+          TALES OF WIND - AUTO-LOGIN & MULTI-TAB TOOL (VERSION 2)
+                 TỔNG KẾT QUY TRÌNH DỰ ÁN & HƯỚNG DẪN NÂNG CẤP
+================================================================================
+
+1. TỔNG QUAN DỰ ÁN (PROJECT OVERVIEW)
+--------------------------------------------------------------------------------
+- Game mục tiêu: Tales of Wind (Phiên bản PC Client - Unity Engine)
+- Thư mục game mặc định: C:\ToWRR
+- Thư mục tool (Version 2): c:\LoginGame\version 2
+- Mục đích tool:
+  + Tự động đăng nhập hàng loạt tài khoản game từ danh sách (Email | Password | Server).
+  + Khởi chạy trực tiếp file thực thi gốc ToW.exe để mở nhiều tab/cửa sổ game độc lập,
+    hoàn toàn không cần tạo các bản clone trung gian hay tốn dung lượng quản lý.
+  + Giao diện đồ họa (GUI Dashboard) Dark Mode trực quan, gọn gàng và dễ thao tác.
+  + Tự động chia lưới xếp ngói (Tile Grid) các cửa sổ game sau khi nạp xong.
+  + Tích hợp cơ chế tự động chống treo game (Watchdog 30s), chống click nhầm cửa sổ
+    và giãn cách thông minh (+3s) cho hệ thống khi mở từ tab thứ 3 trở đi.
+
+
+2. CẤU TRÚC TỆP TIN TRONG DỰ ÁN (c:\LoginGame\version 2)
+--------------------------------------------------------------------------------
+- app_ui.py:
+  + Giao diện đồ họa chính (xây dựng bằng Python Tkinter & ttk).
+  + Thiết kế 2 Tab riêng biệt chuyên dụng:
+    * '🔑 Auto Login': Chạy đăng nhập tuần tự danh sách tài khoản đã chọn.
+    * '👥 Multi Clone': Chạy đa luồng song song (tùy chỉnh số lượng tab cùng lúc), độc lập hoàn toàn.
+  + Cả 2 tab đều khởi chạy trực tiếp từ ToW.exe gốc (không tạo bản sao exe, không tốn dung lượng ổ đĩa).
+  + Checkbox lựa chọn tài khoản độc lập giữa 2 tab (checked_login và checked_clone).
+  + Bảng quản lý tài khoản tinh gọn: Checkbox, Số thứ tự, Email, Mật khẩu (ẩn *), Server, Trạng thái.
+  + Tính năng thêm nhanh, nhập hàng loạt (Batch Import) định dạng: email|password hoặc email|password|server.
+  + Tính năng xóa tài khoản linh hoạt: Nút bấm [🗑️ Xóa Account], phím tắt Delete, menu chuột phải.
+  + Hộp thoại chỉnh sửa thông tin tài khoản nhanh (Email, Mật khẩu, Server).
+  + Bảng nhật ký hoạt động (Logs) hiển thị thời gian thực theo từng giây.
+  + Tự động lưu và nạp cấu hình (config.json) và danh sách tài khoản (accounts.json).
+
+- automation.py:
+  + Động cơ tự động hóa thị giác máy tính (Computer Vision) dùng OpenCV và PyAutoGUI.
+  + Bật cơ chế DPI-Awareness (`SetProcessDpiAwareness`) giúp nhận diện pixel chính xác 100%
+    bất kể màn hình Windows đang đặt tỉ lệ zoom 100%, 125% hay 150%.
+  + Tự động định vị cửa sổ game ToW mới theo danh sách `existing_hwnds` và PID, kích hoạt lên trên cùng (`HWND_TOP`).
+  + Nhập liệu an toàn qua Clipboard (Pyperclip copy + Ctrl+V) để triệt tiêu lỗi gõ tiếng Việt và nuốt ký tự.
+  + Chống treo game thông minh (Watchdog 30s): Tự động phát hiện khi game bị đơ ở bước tiếp theo để khởi động lại.
+  + Tự động thích ứng cấu hình máy (+3s từ tab 3+): Giảm tải CPU/RAM, chống giật lag.
+  + Tự động xếp ngói cửa sổ game (tile_window) theo lưới màn hình.
+
+- templates/:
+  + Thư mục chứa các ảnh mẫu nút bấm được trích xuất trực tiếp:
+    * btn_notice_close.png: Nút [X] đóng bảng thông báo sự kiện (Notice).
+    * btn_account.png: Icon tròn Account màu vàng góc trên bên trái màn hình chờ.
+    * icon_email.png & icon_password.png: Vị trí các ô nhập tài khoản và mật khẩu.
+    * btn_login.png: Nút xanh "Log In".
+    * btn_start_adv_title.png: Nút "Start Adventure" ở màn hình Title.
+    * btn_start_adv_char.png: Nút "Start Adventure" ở màn hình chọn nhân vật.
+    * loading_dear_adv.png & loading_entering.png: Nhận diện màn hình Loading nạp dữ liệu.
+
+- run_tool.bat:
+  + Phím tắt khởi động nhanh Tool chỉ với 1 cú nhấp chuột.
+  + Tự động nhận diện Python 3.11 ngay cả khi chưa thêm vào PATH hệ thống.
+
+- HUONG_DAN_VA_QUY_TRINH_DU_AN.txt:
+  + Tài liệu tổng kết quy trình và hướng dẫn chi tiết của dự án.
+
+
+3. CHI TIẾT QUY TRÌNH ĐĂNG NHẬP MÔ PHỎNG TỪ VIDEO (WALKTHROUGH)
+--------------------------------------------------------------------------------
+Quy trình tự động hóa từng bước được lập trình chuẩn xác theo video thực tế:
+
+Bước 1: Khởi chạy ToW.exe & Định danh chính xác cửa sổ (Chống click nhầm cửa sổ)
+  - Tool ghi nhận danh sách toàn bộ các cửa sổ ToW đang mở trước đó (`existing_hwnds`).
+  - Khởi chạy tiến trình `ToW.exe` từ thư mục game.
+  - Định vị cửa sổ mới: Tool chỉ nhận diện cửa sổ ToW MỚI xuất hiện (loại trừ 100% các cửa sổ đã có trước đó).
+  - Khóa mục tiêu: Mọi thao tác quét ảnh, click chuột (`click_coords`) và nhập dữ liệu (`type_via_clipboard`)
+    đều luôn tự động kích hoạt và đưa đúng cửa sổ mục tiêu lên lớp trên cùng (`HWND_TOP`), loại bỏ hoàn toàn hiện tượng click nhầm sang các tab khác đang chạy ngầm hoặc đã xếp ngói.
+
+Bước 2: Chờ tải tài nguyên & Đóng bảng thông báo (Notice)
+  - Game chạy các bước kiểm tra phiên bản: Checking resource... -> Entering the game...
+  - Khi vào màn hình chính, game thường bật bảng thông báo sự kiện (Welcome to Tales of Wind).
+  - Tool dùng OpenCV quét template `btn_notice_close.png`. Khi phát hiện nút [X], tự động click để đóng popup.
+
+Bước 3: Mở bảng đăng nhập (Đăng xuất tài khoản cũ)
+  - Tool tìm icon tròn `btn_account.png` ở góc trên bên trái.
+  - Click lần 1 vào icon để đăng xuất / mở hộp thoại đăng nhập.
+  - Chờ 2 giây: Nếu bảng thông báo Notice hiện lên đè thì tự động đóng lại, sau đó thực hiện Click lần 2 vào nút Đăng xuất để đảm bảo 100% không bị nuốt click.
+  - Cơ chế chống giật do cửa sổ CMD (Tùy chọn trên giao diện):
+    + Bạn có thể bật Checkbox "Chờ sau đăng xuất (chống giật CMD)" và chỉnh số giây (mặc định 5s).
+    + Sau khoảng trễ, tool sẽ tự động re-activate và giành lại quyền ưu tiên cửa sổ game trước khi điền thông tin.
+
+Bước 4: Điền thông tin tài khoản & Tự động kiểm tra / nhập lại nếu thiếu
+  - Tool định vị ô Email qua `icon_email.png` (+60px sang phải).
+  - Dán Email an toàn qua Clipboard (Ctrl+V).
+  - Lớp kiểm tra 1 (Xác thực ô nhập): Tool copy ngược nội dung từ ô Email ra clipboard để kiểm tra dữ liệu đã thực sự được điền hay chưa. Nếu phát hiện trống, lập tức điền lại.
+  - Định vị ô Password qua `icon_password.png` và dán Mật khẩu.
+  - Click nút xanh `btn_login.png` ("Log In").
+  - Lớp kiểm tra 2 (Kiểm tra phản hồi Form): Sau khi click Log In 2.5s, tool quét màn hình xem form đăng nhập đã đóng hay chưa. Nếu form vẫn còn hiển thị, tool sẽ xóa sạch và nhập lại lượt 2.
+
+Bước 5: Tự động chọn đúng Clone (Server & Nhân vật) qua crop_title_bottom
+  - Sau khi đăng nhập thành công vào màn hình Title:
+    + Tool tự động nhấp vào khung Server (template: crop_title_bottom.png) để mở bảng 'Select Server'.
+    + Chờ bảng 'Select Server' mở ra (nhận diện server_header.png hoặc server_tab_role.png).
+    + Sử dụng công nghệ OCR tích hợp (winocr) quét lưới thẻ nhân vật trong tab Role.
+    + Tự động so khớp chính xác cả tên Server (ví dụ EST-217, EST-218) và tên Nhân vật/Clone (ví dụ loyal3, loyal38...).
+    + Nhấp chọn đúng thẻ nhân vật đó để đồng bộ Server & Clone mong muốn.
+    + Bảng 'Select Server' đóng lại, giao diện quay về màn hình Title với đúng Server & Nhân vật đã chọn.
+    + Sau đó tool tiến hành bấm nút "Start Adventure" (btn_start_adv_title.png / crop_real_start_adv.png) để vào game.
+
+Bước 6: Theo dõi và đợi màn hình Load hoàn tất (Loading Screen)
+  - Sau khi bấm Start Adventure, game chuyển vào màn hình tải tài nguyên bản đồ (Loading Screen: có hoa anh đào và dòng chữ "Entering the game...", "Dear Adventurer").
+  - Tool tự động nhận diện màn hình Loading bằng OpenCV:
+    + Giữ nguyên trạng thái chờ, không thao tác vội để tránh tranh chấp CPU/GPU.
+    + Nếu sau 4s nút Start Adventure vẫn còn (do lag hoặc nuốt click), tool sẽ tự động click lại.
+    + Theo dõi liên tục cho đến khi màn hình Loading biến mất hoàn toàn (xác nhận 2 lần liên tiếp để đảm bảo thế giới game 3D và HUD đã ổn định).
+  - Tự động quét và đóng thông báo Notice trong game (nếu có popup sự kiện bật lên).
+
+Bước 7: Sắp xếp cửa sổ & Chuyển sang tài khoản tiếp theo
+  - Sau khi tài khoản hiện tại đã load xong 100% vào trong game, cửa sổ sẽ tự động được xếp ngói (Tile Grid) vào đúng vị trí lưới trên màn hình.
+  - Sau đó mới chuyển tiếp sang mở và đăng nhập tài khoản kế tiếp, tránh hiện tượng các tab mở đè gây giật lag.
+
+Bước 8: Cơ chế chống treo game tự động (Watchdog 30s - Không tìm thấy bước tiếp theo)
+  - Định nghĩa chính xác: Game bị treo là khi thực hiện xong 1 hành động, tool tìm kiếm hình ảnh/nút để chuyển sang BƯỚC TIẾP THEO nhưng sau 30s tìm kiếm mà KHÔNG TÌM THẤY BƯỚC TIẾP THEO (chứ KHÔNG PHẢI là treo ở bước hiện tại như màn hình đang load nạp tài nguyên).
+  - Cách xử lý:
+    + Khi đang ở bước hiện tại (như màn hình Loading nạp bản đồ): Tool kiên nhẫn chờ nạp xong, không bị giới hạn 30s để tránh giết nhầm game đang load.
+    + Khi chuyển bước (tìm cửa sổ game, tìm màn hình chính, tìm form đăng nhập, tìm nút Start Adventure): Nếu quét liên tục trong 30 giây mà HOÀN TOÀN KHÔNG TÌM THẤY bước tiếp theo -> Kết luận game bị treo/đơ giao diện.
+    + Tool lập tức cưỡng chế đóng tiến trình game bị treo (`taskkill /F /T /PID` & giải phóng HWND).
+    + Tự động khởi động lại game và thực hiện lại từ đầu cho tài khoản đó (tối đa 2 lần thử lại).
+
+Bước 9: Tự động thêm khoảng trễ 3s cho mỗi bước từ Tab game thứ 3 trở đi
+  - Vấn đề: Khi mở cùng lúc từ 3 cửa sổ game Tales of Wind trở lên, hệ thống phần cứng (CPU, GPU, RAM) sẽ chịu tải lớn, tốc độ phản hồi của game bị chậm lại.
+  - Giải pháp thích ứng thông minh:
+    + Tool tự động phát hiện số lượng tab đang chạy hoặc thứ tự tài khoản đang đăng nhập (`index >= 2` hoặc `num_existing >= 2`).
+    + Tự động kích hoạt cơ chế `extra_delay = 3.0s` cộng thêm vào tất cả các khoảng nghỉ giữa các bước.
+    + Tăng thời gian nghỉ trước khi khởi động tab tiếp theo lên 5s (thay vì 2s).
+    + Nhờ cơ chế này, máy tính có đủ thời gian để xử lý đồ họa và đồng bộ dữ liệu, loại bỏ 100% tình trạng giật lag hay nuốt phím khi mở nhiều tab.
+
+Bước 10: Tính năng Quản lý & Xóa Tài Khoản linh hoạt
+  - Nút bấm nổi bật màu hồng [🗑️ Xóa Account] trên thanh công cụ.
+  - Nhận diện thông minh kép: Xóa theo hàng bôi đen bằng chuột HOẶC theo các ô tick chọn [☑].
+  - Phím tắt bàn phím: Chọn dòng tài khoản và nhấn phím `Delete` để xóa tức thì.
+  - Menu chuột phải: Nhấp chuột phải vào dòng tài khoản để chọn "Chỉnh sửa tài khoản..." hoặc "Xóa tài khoản".
+  - Luôn có hộp thoại xác nhận số lượng tài khoản sẽ xóa trước khi thực hiện để chống thao tác nhầm.
+
+
+4. HƯỚNG DẪN KHI THAY Ổ CỨNG HOẶC CHUYỂN MÁY TÍNH MỚI
+--------------------------------------------------------------------------------
+Khi bạn thay ổ cứng hoặc chuyển sang máy tính khác, hãy làm theo các bước sau:
+
+1. Cài đặt Python:
+   - Tải và cài đặt Python 3.10 trở lên từ trang chủ python.org.
+   - LƯU Ý QUAN TRỌNG: Lúc cài đặt nhớ tích chọn ô "Add Python to PATH".
+
+2. Cài các thư viện cần thiết:
+   - Mở Command Prompt (cmd) hoặc PowerShell và chạy lệnh sau:
+     pip install opencv-python pillow pyautogui pyperclip pywin32
+
+3. Đặt thư mục Tool & Game:
+   - Copy toàn bộ thư mục `version 2` này vào ổ cứng mới (ví dụ: D:\LoginGame\version 2).
+   - Đặt game tại vị trí bạn muốn (ví dụ: C:\ToWRR).
+   - Mở tool bằng file `run_tool.bat`. Nếu thư mục game đổi chỗ, bấm nút "📁 Chọn thư mục Game" trên giao diện để chỉ lại đường dẫn.
+
+================================================================================
+                    DỰ ÁN ĐÃ SẴN SÀNG HOẠT ĐỘNG HOÀN HẢO!
+================================================================================

@@ -1,0 +1,7 @@
+accounts.json
+accounts_clone.json
+accounts_login.json
+
+__pycache__/
+*.py[cod]
+*.pyc
