@@ -185,10 +185,21 @@ class StepTimeoutException(Exception):
 
 class CloneNotFoundException(Exception):
     """Ném ra khi không tìm thấy đúng tên clone trên màn hình chọn nhân vật."""
-    pass
+    def __init__(self, message, proc=None, pid=None, hwnd=None):
+        super().__init__(message)
+        self.proc = proc
+        self.pid = pid
+        self.hwnd = hwnd
 
 def kill_game_process(proc=None, pid=None, hwnd=None):
     """Đóng sạch tiến trình game ToW khi bị treo hoặc cần khởi động lại."""
+    owner_pid = None
+    if hwnd and win32gui.IsWindow(hwnd):
+        try:
+            _, owner_pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            pass
+
     try:
         if hwnd and win32gui.IsWindow(hwnd):
             win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
@@ -202,12 +213,24 @@ def kill_game_process(proc=None, pid=None, hwnd=None):
     except Exception:
         pass
         
-    if pid:
+    process_ids = []
+    for process_id in (owner_pid, pid):
+        if process_id and process_id not in process_ids:
+            process_ids.append(process_id)
+
+    for process_id in process_ids:
         try:
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True)
+            subprocess.run(
+                ['taskkill', '/F', '/T', '/PID', str(process_id)],
+                capture_output=True,
+                check=False,
+            )
         except Exception:
             pass
-    time.sleep(1.5)
+
+    deadline = time.time() + 3.0
+    while hwnd and win32gui.IsWindow(hwnd) and time.time() < deadline:
+        time.sleep(0.2)
 
 def wait_for_next_step(hwnd, email, logger, stop_event, step_name, check_func, timeout=30.0):
     """
@@ -547,7 +570,7 @@ def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logge
     words = ocr_left_panel_sync(left_bgr)
     
     best_word = None
-    best_score = -1
+    best_score = 0
     best_y = None
 
     t_name = (target_char or '').strip().lower().replace(' ', '')
@@ -559,20 +582,17 @@ def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logge
         
         # Tính điểm khớp tên nhân vật
         s = 0
-        o_clean = text.lower().replace(' ', '')
+        o_clean = re.sub(r'[^a-z0-9]', '', text.lower())
         if t_name and not t_name.startswith('clone'):
-            if t_name in o_clean:
+            t_clean = re.sub(r'[^a-z0-9]', '', t_name)
+            o_tokens = re.findall(r'[a-z]+\d+', text.lower())
+            if t_clean == o_clean or t_clean in [re.sub(r'[^a-z0-9]', '', token) for token in o_tokens]:
                 s = 100
             else:
-                t_norm = t_name.replace('l', '1').replace('o', '0').replace('z', '2')
+                t_norm = t_clean.replace('l', '1').replace('o', '0').replace('z', '2')
                 o_norm = o_clean.replace('l', '1').replace('o', '0').replace('z', '2')
-                if t_norm in o_norm:
+                if t_norm == o_norm:
                     s = 90
-                else:
-                    t_d = re.findall(r'\d+', t_name)
-                    o_d = re.findall(r'\d+', o_clean)
-                    if t_d and o_d and t_d[-1] == o_d[-1]:
-                        s = 80
         
         if s > best_score:
             best_score = s
@@ -956,7 +976,12 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
             extra_delay=extra_delay
         )
         if not character_selected and target_char and not target_char.lower().startswith('clone'):
-            raise CloneNotFoundException(f'Không tìm thấy clone [{target_char}]')
+            raise CloneNotFoundException(
+                f'Không tìm thấy clone [{target_char}]',
+                proc=proc,
+                pid=pid,
+                hwnd=hwnd,
+            )
         if stop_event and stop_event.is_set():
             return False, proc, pid, hwnd
 
@@ -1039,8 +1064,8 @@ def auto_login_flow(account, clone_exe, stop_event=None, logger=print, index=0, 
             clone_ref = account.get('_clone_ref')
             if clone_ref is not None:
                 clone_ref['status'] = 'không tìm thấy clone'
-            logger(f'[{email}] 🛑 Đang đóng tab game của clone lỗi (HWND: {hwnd}, PID: {pid})...')
-            kill_game_process(proc, pid, hwnd)
+            logger(f'[{email}] 🛑 Đang đóng tab game của clone lỗi (HWND: {e.hwnd}, PID: {e.pid})...')
+            kill_game_process(e.proc, e.pid, e.hwnd)
             logger(f'[{email}] ✅ Đã đóng tab game của clone lỗi.')
             return False
         except Exception as e:
