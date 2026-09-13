@@ -14,6 +14,28 @@ import win32process
 import win32con
 import win32api
 
+FAST_MODE = False
+_time_module = time
+_real_sleep = time.sleep
+
+
+class _TimeFacade:
+    def __getattr__(self, name):
+        return getattr(_time_module, name)
+
+    @staticmethod
+    def sleep(seconds):
+        if not FAST_MODE:
+            _real_sleep(seconds)
+
+
+time = _TimeFacade()
+
+
+def set_fast_mode(enabled):
+    global FAST_MODE
+    FAST_MODE = bool(enabled)
+
 try:
     import winocr
 except Exception:
@@ -43,6 +65,7 @@ TEMPLATES = {
     'icon_email': load_template('icon_email.png'),
     'icon_password': load_template('icon_password.png'),
     'btn_login': load_template('btn_login.png'),
+    'login_form': load_template('test_login_modal.png'),
     'start_adv_title': load_template('btn_start_adv_title.png'),
     'start_adv_char': load_template('btn_start_adv_char.png'),
     'loading_dear_adv': load_template('loading_dear_adv.png'),
@@ -51,6 +74,7 @@ TEMPLATES = {
     'server_header': load_template('server_header.png'),
     'server_tab_role': load_template('server_tab_role.png'),
     'crop_real_start_adv': load_template('crop_real_start_adv.png'),
+    'final_start_adv': load_template('image-2.png'),
 }
 
 def find_window_by_pid(target_pid):
@@ -107,7 +131,8 @@ def activate_window(hwnd):
             else:
                 win32gui.SetForegroundWindow(hwnd)
                 win32gui.BringWindowToTop(hwnd)
-        time.sleep(0.2)
+        # Foreground activation is an OS synchronization point, even in Fast Mode.
+        _real_sleep(0.2)
     except Exception:
         try:
             win32gui.SetForegroundWindow(hwnd)
@@ -144,12 +169,44 @@ def locate_template_in_window(hwnd, template_key, threshold=0.72):
         return (cx, cy, max_val)
     return None
 
-def click_coords(x, y, delay=0.2, hwnd=None, extra_delay=0.0):
+def capture_final_start_button(hwnd, threshold=0.65):
+    """Chụp một frame ổn định và tìm nút Start Adventure cuối trên frame đó."""
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return None
+    activate_window(hwnd)
+    img_bgr, (wx, wy, ww, wh) = capture_window(hwnd)
+    if img_bgr is None:
+        return None
+
+    # Mẫu chuẩn cho bước cuối: image-2.png (313x90).
+    tpl = TEMPLATES['final_start_adv']
+    if tpl.shape[0] > img_bgr.shape[0] or tpl.shape[1] > img_bgr.shape[1]:
+        return None
+    result = cv2.matchTemplate(img_bgr, tpl, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    if max_val >= threshold:
+        th, tw = tpl.shape[:2]
+        return (wx + max_loc[0] + tw // 2, wy + max_loc[1] + th // 2, max_val)
+    return None
+
+def click_coords(x, y, delay=0.2, hwnd=None, extra_delay=0.0, force_real_delay=False):
     if hwnd and win32gui.IsWindow(hwnd):
         activate_window(hwnd)
-    pyautogui.moveTo(x, y, duration=0.15)
-    pyautogui.click(x, y)
-    time.sleep(delay + (0.5 if extra_delay > 0 else 0.0))
+    target = (int(round(x)), int(round(y)))
+    # Dùng tọa độ màn hình Windows trực tiếp để khớp với ImageGrab/GetWindowRect.
+    win32api.SetCursorPos(target)
+    cursor_pos = win32api.GetCursorPos()
+    if cursor_pos != target:
+        _real_sleep(0.05)
+        win32api.SetCursorPos(target)
+        cursor_pos = win32api.GetCursorPos()
+    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    total_delay = delay + (0.5 if extra_delay > 0 else 0.0)
+    if force_real_delay:
+        _real_sleep(total_delay)
+    else:
+        time.sleep(total_delay)
 
 def type_via_clipboard(text, delay=0.2, hwnd=None, extra_delay=0.0):
     if hwnd and win32gui.IsWindow(hwnd):
@@ -203,7 +260,7 @@ def kill_game_process(proc=None, pid=None, hwnd=None):
     try:
         if hwnd and win32gui.IsWindow(hwnd):
             win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-            time.sleep(0.3)
+            _real_sleep(0.3)
     except Exception:
         pass
         
@@ -230,7 +287,22 @@ def kill_game_process(proc=None, pid=None, hwnd=None):
 
     deadline = time.time() + 3.0
     while hwnd and win32gui.IsWindow(hwnd) and time.time() < deadline:
-        time.sleep(0.2)
+        _real_sleep(0.2)
+
+    # Một số phiên bản game không xử lý WM_CLOSE kịp thời; xác nhận lần cuối
+    # và cưỡng chế theo PID đã lấy từ chính HWND nếu cửa sổ vẫn còn.
+    if hwnd and win32gui.IsWindow(hwnd) and owner_pid:
+        try:
+            subprocess.run(
+                ['taskkill', '/F', '/T', '/PID', str(owner_pid)],
+                capture_output=True,
+                check=False,
+            )
+        except Exception:
+            pass
+        deadline = time.time() + 2.0
+        while win32gui.IsWindow(hwnd) and time.time() < deadline:
+            _real_sleep(0.2)
 
 def wait_for_next_step(hwnd, email, logger, stop_event, step_name, check_func, timeout=30.0):
     """
@@ -251,7 +323,7 @@ def wait_for_next_step(hwnd, email, logger, stop_event, step_name, check_func, t
         
     raise StepTimeoutException(f"Không tìm thấy bước tiếp theo [{step_name}] sau {timeout:.0f}s")
 
-def wait_for_loading_done(hwnd, email, logger, stop_event=None, timeout=180.0, extra_delay=0.0):
+def wait_for_loading_done(hwnd, email, logger, stop_event=None, timeout=180.0, extra_delay=0.0, require_loading=False):
     """
     Theo dõi màn hình load sau khi bấm Start Adventure:
     - Khi game đang ở màn hình loading: ĐÂY LÀ BƯỚC HIỆN TẠI ĐANG DIỄN RA (nạp tài nguyên bản đồ).
@@ -287,7 +359,7 @@ def wait_for_loading_done(hwnd, email, logger, stop_event=None, timeout=180.0, e
                     logger(f'[{email}] 🌟 Màn hình load đã hoàn tất sau {elapsed}s! Đã vào thế giới game.')
                     time.sleep(1.0 + extra_delay)
                     return True
-            else:
+            elif not require_loading:
                 match_start = (
                     locate_template_in_window(hwnd, 'start_adv_title', threshold=0.68) or
                     locate_template_in_window(hwnd, 'start_adv_char', threshold=0.68)
@@ -305,8 +377,8 @@ def wait_for_loading_done(hwnd, email, logger, stop_event=None, timeout=180.0, e
 
         time.sleep(1.0)
 
-    logger(f'[{email}] ⚠️ Quá thời gian chờ màn hình load ({timeout}s), tự động tiếp tục...')
-    return True
+    logger(f'[{email}] ❌ Không xác nhận được màn hình loading sau {timeout}s.')
+    return False
 
 async def _async_ocr_card(card_bgr):
     if winocr is None:
@@ -637,7 +709,7 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
     
     # TỰ ĐỘNG THÊM KHOẢNG TRỄ 3S CHO MỖI BƯỚC TỪ TAB GAME THỨ 3 TRỞ ĐI
     # (index >= 2 tức là tab thứ 3+, hoặc khi máy đang chạy sẵn từ 2 cửa sổ game trở lên)
-    extra_delay = 3.0 if (index >= 2 or num_existing >= 2) else 0.0
+    extra_delay = 0.0 if FAST_MODE else (3.0 if (index >= 2 or num_existing >= 2) else 0.0)
     if extra_delay > 0:
         logger(f'[{email}] ⏱️ Tab game thứ {index+1} (đang có {num_existing} tab chạy) -> BẬT KHOẢNG TRỄ +3S CHO MỖI BƯỚC để giảm tải CPU/RAM, chống giật lag!')
     else:
@@ -698,6 +770,18 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
         step_pause("chờ màn hình chính sẵn sàng")
 
         # 3. Click nút Account (Đăng xuất)
+        match_notice_before_logout = locate_template_in_window(hwnd, 'notice_close', threshold=0.72)
+        if match_notice_before_logout:
+            logger(f'[{email}] 📌 Đóng Notice trước khi bấm Account (Đăng xuất)...')
+            click_coords(
+                match_notice_before_logout[0],
+                match_notice_before_logout[1],
+                delay=0.8,
+                hwnd=hwnd,
+                extra_delay=extra_delay,
+            )
+            _real_sleep(0.5)
+
         logger(f'[{email}] 🔑 Đang tìm nút Account (Đăng xuất)...')
         match_acc = locate_template_in_window(hwnd, 'account', threshold=0.70)
         if match_acc:
@@ -717,7 +801,7 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
         if match_notice2:
             logger(f'[{email}] 📌 Bảng thông báo xuất hiện đè. Đang bấm đóng...')
             click_coords(match_notice2[0], match_notice2[1], delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
-            time.sleep(0.8)
+            _real_sleep(0.5)
 
         logger(f'[{email}] 🔁 Bấm nút Account (Đăng xuất) lần 2 để đảm bảo...')
         match_acc2 = locate_template_in_window(hwnd, 'account', threshold=0.70)
@@ -751,6 +835,9 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
                 logger(f'[{email}] 📌 Phát hiện bảng thông báo. Đang tắt [X]...')
                 click_coords(match_n[0], match_n[1], delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
                 time.sleep(0.5)
+            match_form = locate_template_in_window(hwnd, 'login_form', threshold=0.55)
+            if match_form:
+                return ('form', match_form)
             match_e = locate_template_in_window(hwnd, 'icon_email', threshold=0.68)
             if match_e:
                 return ('email', match_e)
@@ -758,6 +845,39 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
             if match_l:
                 return ('login', match_l)
             return None
+
+        form_res = None
+        form_check_start = time.time()
+        while time.time() - form_check_start < 3.0:
+            if stop_event and stop_event.is_set():
+                return False, proc, pid, hwnd
+            form_res = check_login_form()
+            if form_res:
+                logger(f'[{email}] ✅ Đã xác nhận popup form đăng nhập.')
+                break
+            _real_sleep(0.1)
+
+        if not form_res:
+            logger(f'[{email}] ⚠️ Chưa thấy popup form đăng nhập. Đóng Notice và thực hiện lại bước đăng xuất...')
+            match_notice_retry = locate_template_in_window(hwnd, 'notice_close', threshold=0.70)
+            if match_notice_retry:
+                logger(f'[{email}] 📌 Đang tắt Notice trước khi đăng xuất lại...')
+                click_coords(match_notice_retry[0], match_notice_retry[1], delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
+                _real_sleep(0.5)
+
+            match_acc_retry = locate_template_in_window(hwnd, 'account', threshold=0.70)
+            if match_acc_retry:
+                click_coords(match_acc_retry[0], match_acc_retry[1], delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
+            else:
+                rect = win32gui.GetWindowRect(hwnd)
+                wx, wy, ww, wh = rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]
+                click_coords(wx + int(ww * 0.08), wy + int(wh * 0.18), delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
+
+            time.sleep(2.0 + extra_delay)
+            match_notice_retry = locate_template_in_window(hwnd, 'notice_close', threshold=0.70)
+            if match_notice_retry:
+                logger(f'[{email}] 📌 Đang tắt Notice sau khi đăng xuất lại...')
+                click_coords(match_notice_retry[0], match_notice_retry[1], delay=0.8, hwnd=hwnd, extra_delay=extra_delay)
 
         form_res = wait_for_next_step(hwnd, email, logger, stop_event, "Form đăng nhập", check_login_form, timeout=step_timeout)
         if stop_event and stop_event.is_set():
@@ -901,6 +1021,7 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
         if stop_event and stop_event.is_set():
             return False, proc, pid, hwnd
         step_pause("chờ sau khi chọn nhân vật và quay về Title")
+        _real_sleep(1.0 + extra_delay)
 
     logger(f'[{email}] 🚀 Đã trỏ đúng Server & Nhân vật -> Tìm nút Start Adventure để vào game...')
     def check_start_btn():
@@ -932,11 +1053,11 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
         if time.time() - start_wait_t >= (4.0 + extra_delay):
             rect = win32gui.GetWindowRect(hwnd)
             wx, wy, ww, wh = rect[0], rect[1], rect[2]-rect[0], rect[3]-rect[1]
-            logger(f'[{email}] 👉 Bấm tọa độ nút Start Adventure giữa màn hình...')
-            click_coords(wx + int(ww * 0.495), wy + int(wh * 0.77), delay=2.0, hwnd=hwnd, extra_delay=extra_delay)
-            start_res = ('fallback', (wx + int(ww * 0.495), wy + int(wh * 0.77)))
+            logger(f'[{email}] 👉 Bấm tọa độ nút Start Adventure giữa phía dưới...')
+            fallback_start = (wx + int(ww * 0.50), wy + int(wh * 0.90))
+            start_res = ('fallback', fallback_start)
             break
-        time.sleep(0.8)
+        _real_sleep(0.8)
 
     if not start_res:
         raise StepTimeoutException(f"Không tìm thấy bước tiếp theo [Nút Start Adventure] sau {step_timeout:.0f}s")
@@ -944,13 +1065,17 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
     # 1. Nếu đang ở màn hình Title (hoặc fallback): Bấm Start Adventure trên Title để mở màn hình chọn nhân vật
     if start_res[0] in ('title', 'fallback'):
         logger(f'[{email}] ⚔️ Bấm nút Start Adventure trên màn hình Title...')
-        click_coords(start_res[1][0], start_res[1][1], delay=2.0, hwnd=hwnd, extra_delay=extra_delay)
-        time.sleep(1.5 + extra_delay)
+        click_coords(
+            start_res[1][0], start_res[1][1], delay=2.0, hwnd=hwnd,
+            extra_delay=extra_delay, force_real_delay=True,
+        )
+        _real_sleep(1.5 + extra_delay)
         activate_window(hwnd)
 
     # 2. Đợi màn hình chọn nhân vật xuất hiện (tối đa 15s)
     logger(f'[{email}] 🔍 Đang kiểm tra màn hình chọn nhân vật (Character Selection)...')
     is_char_screen = False
+    loading_detected = False
     char_wait_start = time.time()
     while time.time() - char_wait_start < 15.0:
         if stop_event and stop_event.is_set():
@@ -961,45 +1086,121 @@ def _run_flow_steps(account, clone_exe, stop_event=None, logger=print, index=0, 
             break
         # Kiểm tra nếu game vào thẳng màn hình loading map
         if locate_template_in_window(hwnd, 'loading_entering', threshold=0.65) or locate_template_in_window(hwnd, 'loading_dear_adv', threshold=0.65):
+            loading_detected = True
             break
-        time.sleep(0.5)
+        _real_sleep(0.5)
 
     # 3. Ở MÀN HÌNH NÀY: NHẤP VÀO AVATAR KẾ BÊN TÊN NHÂN VẬT TRƯỚC, SAU ĐÓ MỚI BẤM START ADVENTURE!
+    final_start_clicked = False
     if is_char_screen:
-        character_selected = select_character_avatar_in_list(
-            hwnd=hwnd,
-            email=email,
-            target_char=target_char,
-            clone_idx=index,
-            logger=logger,
-            stop_event=stop_event,
-            extra_delay=extra_delay
-        )
-        if not character_selected and target_char and not target_char.lower().startswith('clone'):
-            raise CloneNotFoundException(
-                f'Không tìm thấy clone [{target_char}]',
-                proc=proc,
-                pid=pid,
+        if mode == 'login':
+            logger(f'[{email}] ⏭️ Auto Login: bỏ qua bước nhấp Avatar, đi thẳng tới Start Adventure cuối.')
+        else:
+            character_selected = select_character_avatar_in_list(
                 hwnd=hwnd,
+                email=email,
+                target_char=target_char,
+                clone_idx=index,
+                logger=logger,
+                stop_event=stop_event,
+                extra_delay=extra_delay
             )
+            if not character_selected and target_char and not target_char.lower().startswith('clone'):
+                raise CloneNotFoundException(
+                    f'Không tìm thấy clone [{target_char}]',
+                    proc=proc,
+                    pid=pid,
+                    hwnd=hwnd,
+                )
         if stop_event and stop_event.is_set():
             return False, proc, pid, hwnd
 
+        if mode == 'login':
+            # Auto Login vẫn giữ nhịp render như Safe Mode trước khi tìm nút cuối.
+            _real_sleep(1.0)
         activate_window(hwnd)
+        # Đồng bộ như Safe Mode: chờ game hoàn tất chọn avatar và render nút cuối trước khi chụp.
+        _real_sleep(5.0)
+        match_start_char2 = None
+        start_char_wait = time.time()
+        while time.time() - start_char_wait < 8.0:
+            if stop_event and stop_event.is_set():
+                return False, proc, pid, hwnd
+            # FastMode vẫn phải có một frame chụp thực tế trước khi click cuối.
+            match_start_char2 = capture_final_start_button(hwnd, threshold=0.65)
+            if match_start_char2:
+                break
+            _real_sleep(0.1)
+
         # Bấm nút Start Adventure màu xanh góc dưới bên phải
-        match_start_char2 = locate_template_in_window(hwnd, 'start_adv_char', threshold=0.65)
         if match_start_char2:
+            logger(f'[{email}] 📸 Đã chụp và so sánh với image-2.png (độ khớp {match_start_char2[2]:.2f}).')
+            logger(f'[{email}] 🎯 Tọa độ nút từ ảnh: ({match_start_char2[0]}, {match_start_char2[1]}). Đang đưa con trỏ tới đúng vị trí...')
             logger(f'[{email}] 🎮 Bấm nút Start Adventure màu xanh góc dưới để vào game...')
-            click_coords(match_start_char2[0], match_start_char2[1], delay=2.0, hwnd=hwnd, extra_delay=extra_delay)
+            click_coords(
+                match_start_char2[0], match_start_char2[1], delay=2.0, hwnd=hwnd,
+                extra_delay=extra_delay, force_real_delay=True,
+            )
+            final_start_clicked = True
         else:
             rect = win32gui.GetWindowRect(hwnd)
             wx, wy, ww, wh = rect[0], rect[1], rect[2]-rect[0], rect[3]-rect[1]
-            logger(f'[{email}] 🎮 Bấm tọa độ nút Start Adventure màu xanh góc dưới (83.6%, 90.8%)...')
-            click_coords(wx + int(ww * 0.836), wy + int(wh * 0.908), delay=2.0, hwnd=hwnd, extra_delay=extra_delay)
-        
-    step_pause("chuẩn bị nạp dữ liệu bản đồ")
-    # Đợi màn hình load xong hoàn toàn (đây là bước hiện tại đang diễn ra, KHÔNG ngắt ở 30s)
-    wait_for_loading_done(hwnd, email, logger, stop_event=stop_event, extra_delay=extra_delay)
+            logger(f'[{email}] 🎮 Bấm tọa độ nút Start Adventure màu xanh góc phải bên dưới (83.6%, 90.8%)...')
+            click_coords(
+                wx + int(ww * 0.836), wy + int(wh * 0.908), delay=2.0, hwnd=hwnd,
+                extra_delay=extra_delay, force_real_delay=True,
+            )
+            final_start_clicked = True
+
+    elif not loading_detected and start_res[0] in ('title', 'fallback'):
+        rect = win32gui.GetWindowRect(hwnd)
+        wx, wy, ww, wh = rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]
+        logger(f'[{email}] ⚠️ Không nhận diện được màn hình nhân vật, bấm fallback Start Adventure cuối tại góc phải (83.6%, 90.8%)...')
+        click_coords(
+            wx + int(ww * 0.836), wy + int(wh * 0.908), delay=2.0, hwnd=hwnd,
+            extra_delay=extra_delay, force_real_delay=True,
+        )
+        final_start_clicked = True
+
+    if not final_start_clicked and not loading_detected:
+        raise StepTimeoutException('Chưa click được nút Start Adventure cuối')
+
+    if mode == 'login':
+        # Cho Auto Login thêm thời gian xử lý click cuối như Safe Mode.
+        _real_sleep(2.0)
+
+    # Xác nhận game đã nhận click cuối trước khi cho phép xếp cửa sổ.
+    logger(f'[{email}] 🔍 Đang xác nhận chuyển cảnh sau khi click Start Adventure cuối...')
+    transition_confirmed = False
+    transition_wait_start = time.time()
+    button_gone_count = 0
+    while time.time() - transition_wait_start < 8.0:
+        if stop_event and stop_event.is_set():
+            return False, proc, pid, hwnd
+
+        loading_seen = (
+            locate_template_in_window(hwnd, 'loading_entering', threshold=0.65) or
+            locate_template_in_window(hwnd, 'loading_dear_adv', threshold=0.65)
+        )
+        if loading_seen:
+            logger(f'[{email}] ✅ Đã xác nhận game chuyển sang màn hình loading.')
+            transition_confirmed = True
+            break
+
+        final_button_still_visible = locate_template_in_window(hwnd, 'final_start_adv', threshold=0.65)
+        if not final_button_still_visible:
+            button_gone_count += 1
+            if button_gone_count >= 2:
+                logger(f'[{email}] ✅ Đã xác nhận nút Start Adventure cuối biến mất sau click.')
+                transition_confirmed = True
+                break
+        else:
+            button_gone_count = 0
+
+        _real_sleep(0.2)
+
+    if not transition_confirmed:
+        raise StepTimeoutException('Game chưa xác nhận chuyển cảnh sau khi click Start Adventure cuối')
         
     # Xử lý thông báo in-game nếu có xuất hiện
     match_notice_final = locate_template_in_window(hwnd, 'notice_close', threshold=0.70)

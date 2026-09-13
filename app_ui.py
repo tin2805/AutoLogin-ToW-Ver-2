@@ -29,6 +29,7 @@ class TowAutoApp(tk.Tk):
         self.game_dir = r'C:\ToWRR'
         self.enable_logout_delay = True
         self.logout_delay = 5.0
+        self.launch_mode = None
         
         self.load_data()
         self.setup_styles()
@@ -1308,6 +1309,105 @@ class TowAutoApp(tk.Tk):
                         tree.item(children[index], values=vals)
         self.after(0, _upd)
 
+    def choose_launch_mode(self, tab_mode):
+        """Hiển thị popup chọn chế độ khởi chạy trước khi bắt đầu automation."""
+        dlg = tk.Toplevel(self)
+        dlg.title('Xác nhận chế độ khởi chạy')
+        dlg.geometry('430x235')
+        dlg.resizable(False, False)
+        dlg.configure(bg='#1e1e2e')
+        dlg.transient(self)
+
+        self.update_idletasks()
+        app_x = self.winfo_rootx()
+        app_y = self.winfo_rooty()
+        app_w = self.winfo_width()
+        app_h = self.winfo_height()
+        popup_w = 430
+        popup_h = 235
+        popup_x = app_x + max((app_w - popup_w) // 2, 0)
+        popup_y = app_y + max((app_h - popup_h) // 2, 0)
+        dlg.geometry(f'{popup_w}x{popup_h}+{popup_x}+{popup_y}')
+        dlg.grab_set()
+
+        selected_mode = tk.StringVar(value='safe')
+        tab_label = 'Auto Login' if tab_mode == 'login' else 'Multi Clone'
+
+        tk.Label(
+            dlg,
+            text=f'Chọn chế độ khởi chạy cho [{tab_label}]',
+            bg='#1e1e2e',
+            fg='#89b4fa',
+            font=('Segoe UI', 12, 'bold'),
+        ).pack(anchor='w', padx=20, pady=(18, 10))
+
+        options = tk.Frame(dlg, bg='#1e1e2e')
+        options.pack(fill='x', padx=20)
+        tk.Radiobutton(
+            options,
+            text='Safe Mode',
+            variable=selected_mode,
+            value='safe',
+            bg='#1e1e2e',
+            fg='#a6e3a1',
+            selectcolor='#313244',
+            activebackground='#1e1e2e',
+            activeforeground='#a6e3a1',
+            font=('Segoe UI', 10, 'bold'),
+        ).pack(anchor='w', pady=4)
+        tk.Radiobutton(
+            options,
+            text='Fast Mode',
+            variable=selected_mode,
+            value='fast',
+            bg='#1e1e2e',
+            fg='#fab387',
+            selectcolor='#313244',
+            activebackground='#1e1e2e',
+            activeforeground='#fab387',
+            font=('Segoe UI', 10, 'bold'),
+        ).pack(anchor='w', pady=4)
+
+        result = {'confirmed': False, 'mode': None}
+
+        def confirm():
+            result['confirmed'] = True
+            result['mode'] = selected_mode.get()
+            dlg.destroy()
+
+        def cancel():
+            dlg.destroy()
+
+        buttons = tk.Frame(dlg, bg='#1e1e2e')
+        buttons.pack(side='bottom', fill='x', padx=20, pady=16)
+        tk.Button(
+            buttons,
+            text='Hủy',
+            command=cancel,
+            bg='#45475a',
+            fg='#cdd6f4',
+            relief='flat',
+            padx=12,
+        ).pack(side='right', padx=(6, 0))
+        tk.Button(
+            buttons,
+            text='Xác nhận khởi chạy',
+            command=confirm,
+            bg='#a6e3a1',
+            fg='#11111b',
+            font=('Segoe UI', 9, 'bold'),
+            relief='flat',
+            padx=12,
+        ).pack(side='right')
+
+        dlg.protocol('WM_DELETE_WINDOW', cancel)
+        self.wait_window(dlg)
+        if result['confirmed']:
+            self.launch_mode = result['mode']
+            mode_label = 'Safe Mode' if result['mode'] == 'safe' else 'Fast Mode'
+            self.log(f'[{tab_label}] Đã chọn chế độ khởi chạy: {mode_label}')
+        return result['confirmed']
+
     def start_automation(self, mode='login'):
         acc_list = self.get_accounts(mode)
         if not acc_list:
@@ -1318,6 +1418,9 @@ class TowAutoApp(tk.Tk):
         game_exe = os.path.join(self.game_dir, 'ToW.exe')
         if not os.path.exists(game_exe):
             messagebox.showerror('Không tìm thấy Game', f'Không tìm thấy file ToW.exe trong thư mục:\n{self.game_dir}\n\nVui lòng bấm nút "📁 Chọn thư mục Game" để chỉ đúng nơi cài game!')
+            return
+
+        if not self.choose_launch_mode(mode):
             return
 
         if mode == 'clone':
@@ -1340,6 +1443,10 @@ class TowAutoApp(tk.Tk):
 
     def _run_automation_worker(self, mode='login'):
         tab_name = 'AUTO LOGIN' if mode == 'login' else 'MULTI CLONE'
+        fast_mode = self.launch_mode == 'fast'
+        automation.set_fast_mode(fast_mode)
+        mode_label = 'Fast Mode' if fast_mode else 'Safe Mode'
+        self.log(f'⚙️ [{tab_name}] Chế độ khởi chạy: {mode_label}')
         self.log(f'🚀 BẮT ĐẦU TIẾN TRÌNH [{tab_name}]...')
         game_exe = os.path.join(self.game_dir, 'ToW.exe')
         if not os.path.exists(game_exe):
@@ -1357,7 +1464,9 @@ class TowAutoApp(tk.Tk):
                 concurrency = int(self.spn_concurrent.get())
             except Exception:
                 concurrency = 1
-            if hasattr(self, 'var_delay_clone') and not self.var_delay_clone.get():
+            if fast_mode:
+                logout_delay = 0.0
+            elif hasattr(self, 'var_delay_clone') and not self.var_delay_clone.get():
                 logout_delay = 0.0
             else:
                 try:
@@ -1367,7 +1476,9 @@ class TowAutoApp(tk.Tk):
             auto_tile = self.var_tile_clone.get() if hasattr(self, 'var_tile_clone') else True
         else:
             concurrency = 1
-            if hasattr(self, 'var_delay_login') and not self.var_delay_login.get():
+            if fast_mode:
+                logout_delay = 0.0
+            elif hasattr(self, 'var_delay_login') and not self.var_delay_login.get():
                 logout_delay = 0.0
             else:
                 try:
@@ -1459,7 +1570,8 @@ class TowAutoApp(tk.Tk):
                 # Nghỉ giữa các tài khoản
                 if grp_idx < len(acc_groups) - 1 and not self.stop_event.is_set():
                     self.log(f'⏳ Nghỉ 5s trước tài khoản tiếp theo...')
-                    time.sleep(5.0)
+                    if not fast_mode:
+                        time.sleep(5.0)
 
         else:
             # Auto Login mode — simple sequential run
@@ -1495,7 +1607,8 @@ class TowAutoApp(tk.Tk):
                 if run_idx < total_run - 1 and not self.stop_event.is_set():
                     rest_time = 5.0 if run_idx >= 1 else 2.0
                     self.log(f'Nghỉ {rest_time:.0f} giây trước tài khoản tiếp theo...')
-                    time.sleep(rest_time)
+                    if not fast_mode:
+                        time.sleep(rest_time)
 
         self.log(f'🏁 TIẾN TRÌNH [{tab_name}] ĐÃ KẾT THÚC.')
         def _finish():

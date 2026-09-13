@@ -106,6 +106,7 @@ Bước 5: Tự động chọn đúng Clone (Server & Nhân vật) qua crop_titl
 
 Bước 6: Theo dõi và đợi màn hình Load hoàn tất (Loading Screen)
   - Sau khi bấm Start Adventure, game chuyển vào màn hình tải tài nguyên bản đồ (Loading Screen: có hoa anh đào và dòng chữ "Entering the game...", "Dear Adventurer").
+  - Riêng FastMode, sau khi chọn avatar tool chụp một frame thực tế và so sánh trực tiếp với `templates/image-2.png` (mẫu nút Start Adventure cuối), chỉ click khi ảnh đạt ngưỡng nhận diện; không chuyển tài khoản trong lúc chưa xác nhận chuyển cảnh.
   - Tool tự động nhận diện màn hình Loading bằng OpenCV:
     + Giữ nguyên trạng thái chờ, không thao tác vội để tránh tranh chấp CPU/GPU.
     + Nếu sau 4s nút Start Adventure vẫn còn (do lag hoặc nuốt click), tool sẽ tự động click lại.
@@ -114,7 +115,7 @@ Bước 6: Theo dõi và đợi màn hình Load hoàn tất (Loading Screen)
 
 Bước 7: Sắp xếp cửa sổ & Chuyển sang tài khoản tiếp theo
   - Sau khi tài khoản hiện tại đã load xong 100% vào trong game, cửa sổ sẽ tự động được xếp ngói (Tile Grid) vào đúng vị trí lưới trên màn hình.
-  - Sau đó mới chuyển tiếp sang mở và đăng nhập tài khoản kế tiếp, tránh hiện tượng các tab mở đè gây giật lag.
+  - Trước khi chuyển tiếp, tool xác nhận nút Start Adventure cuối đã biến mất hoặc màn hình Loading đã xuất hiện; sau đó mới xếp cửa sổ và mở tài khoản kế tiếp, tránh hiện tượng các tab mở đè gây giật lag.
 
 Bước 8: Cơ chế chống treo game tự động (Watchdog 30s - Không tìm thấy bước tiếp theo)
   - Định nghĩa chính xác: Game bị treo là khi thực hiện xong 1 hành động, tool tìm kiếm hình ảnh/nút để chuyển sang BƯỚC TIẾP THEO nhưng sau 30s tìm kiếm mà KHÔNG TÌM THẤY BƯỚC TIẾP THEO (chứ KHÔNG PHẢI là treo ở bước hiện tại như màn hình đang load nạp tài nguyên).
