@@ -5,6 +5,8 @@ import time
 import copy
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
+import win32api
+import win32con
 
 import automation
 
@@ -23,18 +25,30 @@ class TowAutoApp(tk.Tk):
         self.configure(bg='#181825')
         
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
+        self.pause_event.set()
+        self.skip_step_event = threading.Event()
+        self.is_running = False
+        self.is_paused = False
+        self._hotkey_thread_running = True
+
         self.worker_thread = None
         self.accounts_login = []
         self.accounts_clone = []
         self.game_dir = r'C:\ToWRR'
         self.enable_logout_delay = True
         self.logout_delay = 5.0
+        self.enable_open_delay = True
+        self.open_delay = 5.0
         self.launch_mode = None
         
         self.load_data()
         self.setup_styles()
         self.create_widgets()
         self.refresh_table()
+        self.bind_hotkeys()
+        self._start_hotkey_listener()
+        self.protocol('WM_DELETE_WINDOW', self._on_app_close)
         
     def setup_styles(self):
         self.style = ttk.Style(self)
@@ -130,6 +144,13 @@ class TowAutoApp(tk.Tk):
         log_header = tk.Frame(bot_frame, bg='#11111b', padx=8, pady=3)
         log_header.pack(fill='x')
         tk.Label(log_header, text='📝 Nhật ký hoạt động (Logs):', font=('Segoe UI', 9, 'bold'), fg='#89b4fa', bg='#11111b').pack(side='left')
+        tk.Label(
+            log_header,
+            text='⌨️ Phím tắt: Ctrl+X (Dừng) | Ctrl+P (Tạm dừng) | Ctrl+C (Tiếp tục) | Ctrl+S (Bỏ qua bước)',
+            font=('Segoe UI', 8, 'italic'),
+            fg='#fab387',
+            bg='#11111b'
+        ).pack(side='left', padx=15)
         tk.Button(log_header, text='Xóa log', bg='#313244', fg='#cdd6f4', relief='flat', font=('Segoe UI', 8), command=self.clear_logs).pack(side='right')
         
         self.log_text = scrolledtext.ScrolledText(bot_frame, bg='#11111b', fg='#a6adc8', font=('Consolas', 10), insertbackground='#ffffff')
@@ -140,33 +161,60 @@ class TowAutoApp(tk.Tk):
         ctrl_frame = ttk.LabelFrame(parent, text=' ⚙️ Điều khiển Đăng nhập Tự động (Auto Login) ')
         ctrl_frame.pack(fill='x', padx=8, pady=5)
         
-        c_row = tk.Frame(ctrl_frame, bg='#1e1e2e', pady=6, padx=6)
-        c_row.pack(fill='x')
-        
+        main_ctrl_frame = tk.Frame(ctrl_frame, bg='#1e1e2e', pady=6, padx=6)
+        main_ctrl_frame.pack(fill='x')
+
+        opts_frame = tk.Frame(main_ctrl_frame, bg='#1e1e2e')
+        opts_frame.pack(side='left', fill='x', expand=True)
+
+        btn_frame = tk.Frame(main_ctrl_frame, bg='#1e1e2e')
+        btn_frame.pack(side='right')
+
+        # Row 1: Chờ sau đăng xuất
+        r1 = tk.Frame(opts_frame, bg='#1e1e2e')
+        r1.pack(anchor='w', pady=2)
         self.var_delay_login = tk.BooleanVar(value=self.enable_logout_delay)
         chk_delay_login = tk.Checkbutton(
-            c_row, text='Chờ sau đăng xuất (chống giật CMD):',
+            r1, text='Chờ sau đăng xuất (chống giật CMD):',
             variable=self.var_delay_login, command=self._on_delay_toggle_login,
             bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e'
         )
         chk_delay_login.pack(side='left', padx=3)
         
         spn_state = 'normal' if self.enable_logout_delay else 'disabled'
-        self.spn_logout_delay_login = tk.Spinbox(c_row, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_state)
+        self.spn_logout_delay_login = tk.Spinbox(r1, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_state)
         self.spn_logout_delay_login.delete(0, 'end')
         self.spn_logout_delay_login.insert(0, str(int(self.logout_delay)))
         self.spn_logout_delay_login.pack(side='left', padx=2)
-        tk.Label(c_row, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 8))
+        tk.Label(r1, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 8))
         
+        # Row 2 (ở phía dưới): Chờ sau khi mở game
+        r2 = tk.Frame(opts_frame, bg='#1e1e2e')
+        r2.pack(anchor='w', pady=2)
+        self.var_open_delay_login = tk.BooleanVar(value=self.enable_open_delay)
+        chk_open_delay_login = tk.Checkbutton(
+            r2, text='Chờ sau khi mở game:',
+            variable=self.var_open_delay_login, command=self._on_open_delay_toggle_login,
+            bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e'
+        )
+        chk_open_delay_login.pack(side='left', padx=3)
+
+        spn_open_state = 'normal' if self.enable_open_delay else 'disabled'
+        self.spn_open_delay_login = tk.Spinbox(r2, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_open_state)
+        self.spn_open_delay_login.delete(0, 'end')
+        self.spn_open_delay_login.insert(0, str(int(self.open_delay)))
+        self.spn_open_delay_login.pack(side='left', padx=2)
+        tk.Label(r2, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 8))
+
         self.var_tile_login = tk.BooleanVar(value=True)
-        chk_tile = tk.Checkbutton(c_row, text='Tự xếp ngói', variable=self.var_tile_login, bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e')
+        chk_tile = tk.Checkbutton(r2, text='|  Tự xếp ngói', variable=self.var_tile_login, bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e')
         chk_tile.pack(side='left', padx=6)
         
-        self.btn_start_login = ttk.Button(c_row, text='▶ BẮT ĐẦU AUTO LOGIN', style='Green.TButton', command=lambda: self.start_automation(mode='login'))
-        self.btn_start_login.pack(side='right', padx=5)
+        self.btn_start_login = ttk.Button(btn_frame, text='▶ BẮT ĐẦU AUTO LOGIN', style='Green.TButton', command=lambda: self.start_automation(mode='login'))
+        self.btn_start_login.pack(side='left', padx=5)
         
-        self.btn_stop_login = ttk.Button(c_row, text='⏹ DỪNG LẠI', style='Red.TButton', command=self.stop_automation, state='disabled')
-        self.btn_stop_login.pack(side='right', padx=5)
+        self.btn_stop_login = ttk.Button(btn_frame, text='⏹ DỪNG LẠI', style='Red.TButton', command=self.stop_automation, state='disabled')
+        self.btn_stop_login.pack(side='left', padx=5)
 
         # Quick Add Bar
         add_frame = tk.Frame(parent, bg='#1e1e2e', padx=8, pady=4)
@@ -183,26 +231,35 @@ class TowAutoApp(tk.Tk):
         tk.Label(add_frame, text='Server:', bg='#1e1e2e', fg='#cdd6f4').pack(side='left', padx=3)
         self.ent_server_login = tk.Entry(add_frame, width=12, bg='#313244', fg='#ffffff', insertbackground='#ffffff')
         self.ent_server_login.pack(side='left', padx=3)
+
+        action_frame = tk.Frame(parent, bg='#1e1e2e', padx=8, pady=2)
+        action_frame.pack(fill='x')
         
-        btn_add = tk.Button(add_frame, text='➕ Thêm', bg='#89b4fa', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', command=lambda: self.add_single_account(mode='login'))
+        btn_add = tk.Button(action_frame, text='➕ Thêm', bg='#89b4fa', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', command=lambda: self.add_single_account(mode='login'))
         btn_add.pack(side='left', padx=6)
         
-        btn_batch = tk.Button(add_frame, text='📋 Nhập hàng loạt', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.open_batch_dialog(mode='login'))
+        btn_batch = tk.Button(action_frame, text='📋 Nhập hàng loạt', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.open_batch_dialog(mode='login'))
         btn_batch.pack(side='left', padx=4)
         
-        btn_sel_all = tk.Button(add_frame, text='☑ Chọn hết', bg='#313244', fg='#a6e3a1', relief='flat', font=('Segoe UI', 8, 'bold'),
+        btn_sel_all = tk.Button(action_frame, text='☑ Chọn hết', bg='#313244', fg='#a6e3a1', relief='flat', font=('Segoe UI', 8, 'bold'),
                                 command=lambda: self.toggle_all(self.tree_login, 'login', force_state=True))
         btn_sel_all.pack(side='left', padx=3)
         
-        btn_desel_all = tk.Button(add_frame, text='☐ Bỏ chọn', bg='#313244', fg='#cdd6f4', relief='flat', font=('Segoe UI', 8),
+        btn_desel_all = tk.Button(action_frame, text='☐ Bỏ chọn', bg='#313244', fg='#cdd6f4', relief='flat', font=('Segoe UI', 8),
                                   command=lambda: self.toggle_all(self.tree_login, 'login', force_state=False))
         btn_desel_all.pack(side='left', padx=3)
         
-        btn_del = tk.Button(add_frame, text='🗑️ Xóa acc đã tick [☑]', bg='#f38ba8', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', padx=8, command=lambda: self.delete_checked_accounts(self.tree_login, 'login'))
+        btn_del = tk.Button(action_frame, text='🗑️ Xóa acc đã tick [☑]', bg='#f38ba8', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', padx=8, command=lambda: self.delete_checked_accounts(self.tree_login, 'login'))
         btn_del.pack(side='right', padx=4)
         
-        btn_clear = tk.Button(add_frame, text='Xóa hết', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.clear_all_accounts('login'))
+        btn_clear = tk.Button(action_frame, text='Xóa hết', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.clear_all_accounts('login'))
         btn_clear.pack(side='right', padx=4)
+
+        btn_reset_status = tk.Button(
+            action_frame, text='↻ Reset trạng thái', bg='#f9e2af', fg='#11111b',
+            relief='flat', command=lambda: self.reset_status('login')
+        )
+        btn_reset_status.pack(side='right', padx=4)
 
         # Accounts Treeview Table
         tbl_frame = tk.Frame(parent, bg='#1e1e2e')
@@ -240,39 +297,66 @@ class TowAutoApp(tk.Tk):
         ctrl_frame = ttk.LabelFrame(parent, text=' ⚙️ Điều khiển Mở Đa Tab Game (Multi Clone) ')
         ctrl_frame.pack(fill='x', padx=8, pady=5)
         
-        c_row = tk.Frame(ctrl_frame, bg='#1e1e2e', pady=6, padx=6)
-        c_row.pack(fill='x')
-        
-        tk.Label(c_row, text='Số tab chạy cùng lúc:', bg='#1e1e2e', fg='#cdd6f4').pack(side='left', padx=3)
-        self.spn_concurrent = tk.Spinbox(c_row, from_=1, to=10, width=4, bg='#313244', fg='#ffffff')
+        main_ctrl_frame = tk.Frame(ctrl_frame, bg='#1e1e2e', pady=6, padx=6)
+        main_ctrl_frame.pack(fill='x')
+
+        opts_frame = tk.Frame(main_ctrl_frame, bg='#1e1e2e')
+        opts_frame.pack(side='left', fill='x', expand=True)
+
+        btn_frame = tk.Frame(main_ctrl_frame, bg='#1e1e2e')
+        btn_frame.pack(side='right')
+
+        # Row 1: Số tab & Chờ sau đăng xuất
+        r1 = tk.Frame(opts_frame, bg='#1e1e2e')
+        r1.pack(anchor='w', pady=2)
+        tk.Label(r1, text='Số tab chạy cùng lúc:', bg='#1e1e2e', fg='#cdd6f4').pack(side='left', padx=3)
+        self.spn_concurrent = tk.Spinbox(r1, from_=1, to=10, width=4, bg='#313244', fg='#ffffff')
         self.spn_concurrent.delete(0, 'end')
         self.spn_concurrent.insert(0, '1')
         self.spn_concurrent.pack(side='left', padx=3)
         
         self.var_delay_clone = tk.BooleanVar(value=self.enable_logout_delay)
         chk_delay_clone = tk.Checkbutton(
-            c_row, text=' |  Chờ sau đăng xuất (chống giật CMD):',
+            r1, text=' |  Chờ sau đăng xuất (chống giật CMD):',
             variable=self.var_delay_clone, command=self._on_delay_toggle_clone,
             bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e'
         )
         chk_delay_clone.pack(side='left', padx=(6, 1))
         
         spn_state_c = 'normal' if self.enable_logout_delay else 'disabled'
-        self.spn_logout_delay_clone = tk.Spinbox(c_row, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_state_c)
+        self.spn_logout_delay_clone = tk.Spinbox(r1, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_state_c)
         self.spn_logout_delay_clone.delete(0, 'end')
         self.spn_logout_delay_clone.insert(0, str(int(self.logout_delay)))
         self.spn_logout_delay_clone.pack(side='left', padx=2)
-        tk.Label(c_row, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 6))
-        
+        tk.Label(r1, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 6))
+
+        # Row 2 (ở phía dưới): Chờ sau khi mở game
+        r2 = tk.Frame(opts_frame, bg='#1e1e2e')
+        r2.pack(anchor='w', pady=2)
+        self.var_open_delay_clone = tk.BooleanVar(value=self.enable_open_delay)
+        chk_open_delay_clone = tk.Checkbutton(
+            r2, text='Chờ sau khi mở game:',
+            variable=self.var_open_delay_clone, command=self._on_open_delay_toggle_clone,
+            bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e'
+        )
+        chk_open_delay_clone.pack(side='left', padx=3)
+
+        spn_open_state_c = 'normal' if self.enable_open_delay else 'disabled'
+        self.spn_open_delay_clone = tk.Spinbox(r2, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_open_state_c)
+        self.spn_open_delay_clone.delete(0, 'end')
+        self.spn_open_delay_clone.insert(0, str(int(self.open_delay)))
+        self.spn_open_delay_clone.pack(side='left', padx=2)
+        tk.Label(r2, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 6))
+
         self.var_tile_clone = tk.BooleanVar(value=True)
-        chk_tile = tk.Checkbutton(c_row, text='Tự xếp ngói', variable=self.var_tile_clone, bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e')
+        chk_tile = tk.Checkbutton(r2, text='|  Tự xếp ngói', variable=self.var_tile_clone, bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e')
         chk_tile.pack(side='left', padx=6)
         
-        self.btn_start_clone = ttk.Button(c_row, text='▶ BẮT ĐẦU MULTI CLONE', style='Green.TButton', command=lambda: self.start_automation(mode='clone'))
-        self.btn_start_clone.pack(side='right', padx=5)
+        self.btn_start_clone = ttk.Button(btn_frame, text='▶ BẮT ĐẦU MULTI CLONE', style='Green.TButton', command=lambda: self.start_automation(mode='clone'))
+        self.btn_start_clone.pack(side='left', padx=5)
         
-        self.btn_stop_clone = ttk.Button(c_row, text='⏹ DỪNG LẠI', style='Red.TButton', command=self.stop_automation, state='disabled')
-        self.btn_stop_clone.pack(side='right', padx=5)
+        self.btn_stop_clone = ttk.Button(btn_frame, text='⏹ DỪNG LẠI', style='Red.TButton', command=self.stop_automation, state='disabled')
+        self.btn_stop_clone.pack(side='left', padx=5)
 
         # Quick Add Bar
         add_frame = tk.Frame(parent, bg='#1e1e2e', padx=8, pady=4)
@@ -293,26 +377,35 @@ class TowAutoApp(tk.Tk):
         tk.Label(add_frame, text='Server:', bg='#1e1e2e', fg='#cdd6f4').pack(side='left', padx=3)
         self.ent_server_clone = tk.Entry(add_frame, width=10, bg='#313244', fg='#ffffff', insertbackground='#ffffff')
         self.ent_server_clone.pack(side='left', padx=3)
+
+        action_frame = tk.Frame(parent, bg='#1e1e2e', padx=8, pady=2)
+        action_frame.pack(fill='x')
         
-        btn_add = tk.Button(add_frame, text='➕ Thêm', bg='#89b4fa', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', command=lambda: self.add_single_account(mode='clone'))
+        btn_add = tk.Button(action_frame, text='➕ Thêm', bg='#89b4fa', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', command=lambda: self.add_single_account(mode='clone'))
         btn_add.pack(side='left', padx=5)
         
-        btn_batch = tk.Button(add_frame, text='📋 Nhập hàng loạt', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.open_batch_dialog(mode='clone'))
+        btn_batch = tk.Button(action_frame, text='📋 Nhập hàng loạt', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.open_batch_dialog(mode='clone'))
         btn_batch.pack(side='left', padx=4)
         
-        btn_sel_all = tk.Button(add_frame, text='☑ Chọn hết', bg='#313244', fg='#a6e3a1', relief='flat', font=('Segoe UI', 8, 'bold'),
+        btn_sel_all = tk.Button(action_frame, text='☑ Chọn hết', bg='#313244', fg='#a6e3a1', relief='flat', font=('Segoe UI', 8, 'bold'),
                                 command=lambda: self.toggle_all(self.tree_clone, 'clone', force_state=True))
         btn_sel_all.pack(side='left', padx=3)
         
-        btn_desel_all = tk.Button(add_frame, text='☐ Bỏ chọn', bg='#313244', fg='#cdd6f4', relief='flat', font=('Segoe UI', 8),
+        btn_desel_all = tk.Button(action_frame, text='☐ Bỏ chọn', bg='#313244', fg='#cdd6f4', relief='flat', font=('Segoe UI', 8),
                                   command=lambda: self.toggle_all(self.tree_clone, 'clone', force_state=False))
         btn_desel_all.pack(side='left', padx=3)
         
-        btn_del = tk.Button(add_frame, text='🗑️ Xóa acc đã tick [☑]', bg='#f38ba8', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', padx=8, command=lambda: self.delete_checked_accounts(self.tree_clone, 'clone'))
+        btn_del = tk.Button(action_frame, text='🗑️ Xóa acc đã tick [☑]', bg='#f38ba8', fg='#11111b', font=('Segoe UI', 9, 'bold'), relief='flat', padx=8, command=lambda: self.delete_checked_accounts(self.tree_clone, 'clone'))
         btn_del.pack(side='right', padx=4)
         
-        btn_clear = tk.Button(add_frame, text='Xóa hết', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.clear_all_accounts('clone'))
+        btn_clear = tk.Button(action_frame, text='Xóa hết', bg='#45475a', fg='#cdd6f4', relief='flat', command=lambda: self.clear_all_accounts('clone'))
         btn_clear.pack(side='right', padx=4)
+
+        btn_reset_status = tk.Button(
+            action_frame, text='↻ Reset trạng thái', bg='#f9e2af', fg='#11111b',
+            relief='flat', command=lambda: self.reset_status('clone')
+        )
+        btn_reset_status.pack(side='right', padx=4)
 
         # Accounts Treeview Table with dedicated Clone column
         tbl_frame = tk.Frame(parent, bg='#1e1e2e')
@@ -357,6 +450,83 @@ class TowAutoApp(tk.Tk):
     def clear_logs(self):
         self.log_text.delete('1.0', 'end')
 
+    def bind_hotkeys(self):
+        """Bắt phím tắt khi cửa sổ tool đang được focus."""
+        for key in ('<Control-x>', '<Control-X>'):
+            self.bind_all(key, lambda e: self._on_hotkey_stop())
+        for key in ('<Control-p>', '<Control-P>'):
+            self.bind_all(key, lambda e: self._on_hotkey_pause())
+        for key in ('<Control-c>', '<Control-C>'):
+            self.bind_all(key, lambda e: self._on_hotkey_resume())
+        for key in ('<Control-s>', '<Control-S>'):
+            self.bind_all(key, lambda e: self._on_hotkey_skip_step())
+
+    def _start_hotkey_listener(self):
+        """Khởi động luồng nền lắng nghe phím tắt toàn hệ thống (Global Hotkeys)."""
+        self._hotkey_thread = threading.Thread(target=self._hotkey_worker, daemon=True)
+        self._hotkey_thread.start()
+
+    def _hotkey_worker(self):
+        keys_down = set()
+        hotkey_map = {
+            ord('X'): self._on_hotkey_stop,
+            ord('P'): self._on_hotkey_pause,
+            ord('C'): self._on_hotkey_resume,
+            ord('S'): self._on_hotkey_skip_step,
+        }
+        while self._hotkey_thread_running:
+            try:
+                ctrl_down = bool(
+                    (win32api.GetAsyncKeyState(win32con.VK_CONTROL) & 0x8000) or
+                    (win32api.GetAsyncKeyState(win32con.VK_LCONTROL) & 0x8000) or
+                    (win32api.GetAsyncKeyState(win32con.VK_RCONTROL) & 0x8000)
+                )
+                if ctrl_down:
+                    for vk, callback in hotkey_map.items():
+                        pressed = bool(win32api.GetAsyncKeyState(vk) & 0x8000)
+                        if pressed:
+                            if vk not in keys_down:
+                                keys_down.add(vk)
+                                self.after(0, callback)
+                        else:
+                            keys_down.discard(vk)
+                else:
+                    keys_down.clear()
+            except Exception:
+                pass
+            time.sleep(0.04)
+
+    def _on_hotkey_stop(self):
+        if self.is_running:
+            self.log('🛑 [Phím tắt Ctrl+X] Người dùng đã yêu cầu dừng chương trình!')
+            self.stop_automation()
+
+    def _on_hotkey_pause(self):
+        if self.is_running and not self.is_paused:
+            self.pause_event.clear()
+            self.is_paused = True
+            self.log('⏸️ [Phím tắt Ctrl+P] ĐÃ TẠM DỪNG TIẾN TRÌNH! (Nhấn Ctrl+C để tiếp tục, Ctrl+S để bỏ qua bước, Ctrl+X để dừng)')
+
+    def _on_hotkey_resume(self):
+        if self.is_running and self.is_paused:
+            self.pause_event.set()
+            self.is_paused = False
+            self.log('▶️ [Phím tắt Ctrl+C] ĐÃ TIẾP TỤC TIẾN TRÌNH!')
+
+    def _on_hotkey_skip_step(self):
+        if self.is_running:
+            self.skip_step_event.set()
+            if self.is_paused:
+                self.pause_event.set()
+                self.is_paused = False
+            self.log('⏩ [Phím tắt Ctrl+S] YÊU CẦU BỎ QUA BƯỚC HIỆN TẠI, CHUYỂN TIẾP...')
+
+    def _on_app_close(self):
+        self._hotkey_thread_running = False
+        self.stop_event.set()
+        self.pause_event.set()
+        self.destroy()
+
     def _on_delay_toggle_login(self):
         enabled = self.var_delay_login.get()
         if hasattr(self, 'var_delay_clone'):
@@ -379,6 +549,28 @@ class TowAutoApp(tk.Tk):
             self.spn_logout_delay_clone.config(state=state)
         self.save_data()
 
+    def _on_open_delay_toggle_login(self):
+        enabled = self.var_open_delay_login.get()
+        if hasattr(self, 'var_open_delay_clone'):
+            self.var_open_delay_clone.set(enabled)
+        state = 'normal' if enabled else 'disabled'
+        if hasattr(self, 'spn_open_delay_login'):
+            self.spn_open_delay_login.config(state=state)
+        if hasattr(self, 'spn_open_delay_clone'):
+            self.spn_open_delay_clone.config(state=state)
+        self.save_data()
+
+    def _on_open_delay_toggle_clone(self):
+        enabled = self.var_open_delay_clone.get()
+        if hasattr(self, 'var_open_delay_login'):
+            self.var_open_delay_login.set(enabled)
+        state = 'normal' if enabled else 'disabled'
+        if hasattr(self, 'spn_open_delay_login'):
+            self.spn_open_delay_login.config(state=state)
+        if hasattr(self, 'spn_open_delay_clone'):
+            self.spn_open_delay_clone.config(state=state)
+        self.save_data()
+
     def load_data(self):
         if os.path.exists(CONFIG_FILE):
             try:
@@ -387,6 +579,8 @@ class TowAutoApp(tk.Tk):
                     self.game_dir = cfg.get('game_dir', self.game_dir)
                     self.enable_logout_delay = cfg.get('enable_logout_delay', True)
                     self.logout_delay = cfg.get('logout_delay', 5.0)
+                    self.enable_open_delay = cfg.get('enable_open_delay', True)
+                    self.open_delay = cfg.get('open_delay', 5.0)
             except Exception:
                 pass
 
@@ -499,8 +693,32 @@ class TowAutoApp(tk.Tk):
                 except Exception:
                     pass
 
+            open_delay_val = 5.0
+            enable_open_delay = True
+            if hasattr(self, 'var_open_delay_login'):
+                enable_open_delay = self.var_open_delay_login.get()
+            elif hasattr(self, 'var_open_delay_clone'):
+                enable_open_delay = self.var_open_delay_clone.get()
+
+            if hasattr(self, 'spn_open_delay_login'):
+                try:
+                    open_delay_val = float(self.spn_open_delay_login.get())
+                except Exception:
+                    pass
+            elif hasattr(self, 'spn_open_delay_clone'):
+                try:
+                    open_delay_val = float(self.spn_open_delay_clone.get())
+                except Exception:
+                    pass
+
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump({'game_dir': self.game_dir, 'enable_logout_delay': enable_delay, 'logout_delay': delay_val}, f, indent=2)
+                json.dump({
+                    'game_dir': self.game_dir,
+                    'enable_logout_delay': enable_delay,
+                    'logout_delay': delay_val,
+                    'enable_open_delay': enable_open_delay,
+                    'open_delay': open_delay_val
+                }, f, indent=2)
             with open(ACCOUNTS_LOGIN_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.accounts_login, f, indent=2)
             with open(ACCOUNTS_CLONE_FILE, 'w', encoding='utf-8') as f:
@@ -1297,6 +1515,7 @@ class TowAutoApp(tk.Tk):
         acc_list = self.get_accounts(mode)
         if index < len(acc_list):
             acc_list[index]['status'] = status_text
+            self.save_data()
         def _upd():
             tree = getattr(self, f'tree_{mode}', None)
             if tree:
@@ -1308,6 +1527,28 @@ class TowAutoApp(tk.Tk):
                         vals[status_col_idx] = status_text
                         tree.item(children[index], values=vals)
         self.after(0, _upd)
+
+    def reset_status(self, mode='login'):
+        """Đặt lại status độc lập cho toàn bộ danh sách của một tab."""
+        acc_list = self.get_accounts(mode)
+        if not acc_list:
+            return
+        tab_label = 'Auto Login' if mode == 'login' else 'Multi Clone'
+        if not messagebox.askyesno(
+            'Reset trạng thái',
+            f'Đặt lại trạng thái của toàn bộ account trong tab {tab_label}?'
+        ):
+            return
+
+        for account in acc_list:
+            account['status'] = 'Sẵn sàng'
+            if mode == 'clone':
+                for clone in account.get('clones', []):
+                    clone['status'] = 'Sẵn sàng'
+
+        self.save_data()
+        self.refresh_table(mode)
+        self.log(f'↻ [{tab_label}] Đã reset trạng thái account' + (' và clone.' if mode == 'clone' else '.'))
 
     def choose_launch_mode(self, tab_mode):
         """Hiển thị popup chọn chế độ khởi chạy trước khi bắt đầu automation."""
@@ -1431,6 +1672,10 @@ class TowAutoApp(tk.Tk):
             if hasattr(self, 'btn_stop_login'): self.btn_stop_login.config(state='normal')
             
         self.stop_event.clear()
+        self.pause_event.set()
+        self.skip_step_event.clear()
+        self.is_running = True
+        self.is_paused = False
         
         self.worker_thread = threading.Thread(target=self._run_automation_worker, args=(mode,), daemon=True)
         self.worker_thread.start()
@@ -1438,6 +1683,9 @@ class TowAutoApp(tk.Tk):
     def stop_automation(self):
         self.log('🛑 Đang yêu cầu dừng toàn bộ tiến trình...')
         self.stop_event.set()
+        self.pause_event.set()
+        self.skip_step_event.set()
+        self.is_paused = False
         if hasattr(self, 'btn_stop_login'): self.btn_stop_login.config(state='disabled')
         if hasattr(self, 'btn_stop_clone'): self.btn_stop_clone.config(state='disabled')
 
@@ -1451,6 +1699,9 @@ class TowAutoApp(tk.Tk):
         game_exe = os.path.join(self.game_dir, 'ToW.exe')
         if not os.path.exists(game_exe):
             self.log(f'❌ Không tìm thấy file ToW.exe trong {self.game_dir}!')
+            self.is_running = False
+            self.is_paused = False
+            self.pause_event.set()
             def _reset():
                 if hasattr(self, 'btn_start_login'): self.btn_start_login.config(state='normal')
                 if hasattr(self, 'btn_start_clone'): self.btn_start_clone.config(state='normal')
@@ -1464,27 +1715,39 @@ class TowAutoApp(tk.Tk):
                 concurrency = int(self.spn_concurrent.get())
             except Exception:
                 concurrency = 1
-            if fast_mode:
-                logout_delay = 0.0
-            elif hasattr(self, 'var_delay_clone') and not self.var_delay_clone.get():
+            if hasattr(self, 'var_delay_clone') and not self.var_delay_clone.get():
                 logout_delay = 0.0
             else:
                 try:
                     logout_delay = float(self.spn_logout_delay_clone.get())
                 except Exception:
                     logout_delay = 5.0
+
+            if hasattr(self, 'var_open_delay_clone') and not self.var_open_delay_clone.get():
+                open_game_delay = 0.0
+            else:
+                try:
+                    open_game_delay = float(self.spn_open_delay_clone.get())
+                except Exception:
+                    open_game_delay = 5.0
             auto_tile = self.var_tile_clone.get() if hasattr(self, 'var_tile_clone') else True
         else:
             concurrency = 1
-            if fast_mode:
-                logout_delay = 0.0
-            elif hasattr(self, 'var_delay_login') and not self.var_delay_login.get():
+            if hasattr(self, 'var_delay_login') and not self.var_delay_login.get():
                 logout_delay = 0.0
             else:
                 try:
                     logout_delay = float(self.spn_logout_delay_login.get())
                 except Exception:
                     logout_delay = 5.0
+
+            if hasattr(self, 'var_open_delay_login') and not self.var_open_delay_login.get():
+                open_game_delay = 0.0
+            else:
+                try:
+                    open_game_delay = float(self.spn_open_delay_login.get())
+                except Exception:
+                    open_game_delay = 5.0
             auto_tile = self.var_tile_login.get() if hasattr(self, 'var_tile_login') else True
 
         acc_list = self.get_accounts(mode)
@@ -1539,8 +1802,13 @@ class TowAutoApp(tk.Tk):
                     base_index=base_run_idx,
                     total_tasks=total_tasks,
                     logout_delay=logout_delay,
+                    open_game_delay=open_game_delay,
                     step_timeout=30.0,
                     max_retries=2,
+                    pause_event=self.pause_event,
+                    skip_step_event=self.skip_step_event,
+                    auto_tile=auto_tile,
+                    concurrency=concurrency,
                 )
 
                 # Write status back to each clone dict
@@ -1553,6 +1821,9 @@ class TowAutoApp(tk.Tk):
                         c['status'] = '⏹ Đã dừng'
                     else:
                         c['status'] = '❌ Lỗi đăng nhập'
+
+                # Lưu trạng thái từng clone ngay sau khi nhóm clone kết thúc.
+                self.save_data()
 
                 # Update account row status summary
                 ok_count = sum(1 for ok in results if ok)
@@ -1570,8 +1841,20 @@ class TowAutoApp(tk.Tk):
                 # Nghỉ giữa các tài khoản
                 if grp_idx < len(acc_groups) - 1 and not self.stop_event.is_set():
                     self.log(f'⏳ Nghỉ 5s trước tài khoản tiếp theo...')
-                    if not fast_mode:
-                        time.sleep(5.0)
+                    delay_start = time.time()
+                    while time.time() - delay_start < 5.0:
+                        if self.stop_event.is_set():
+                            break
+                        if not self.pause_event.is_set():
+                            while not self.pause_event.is_set():
+                                if self.stop_event.is_set() or self.skip_step_event.is_set():
+                                    break
+                                time.sleep(0.05)
+                        if self.skip_step_event.is_set():
+                            self.skip_step_event.clear()
+                            self.log('⏩ [Phím tắt Ctrl+S] Đã bỏ qua thời gian nghỉ giữa các tài khoản!')
+                            break
+                        time.sleep(0.2)
 
         else:
             # Auto Login mode — simple sequential run
@@ -1591,9 +1874,13 @@ class TowAutoApp(tk.Tk):
                     index=run_idx,
                     total=total_run,
                     logout_delay=logout_delay,
+                    open_game_delay=open_game_delay,
                     mode=mode,
                     step_timeout=30.0,
-                    max_retries=2
+                    max_retries=2,
+                    pause_event=self.pause_event,
+                    skip_step_event=self.skip_step_event,
+                    auto_tile=auto_tile,
                 )
 
                 if success:
@@ -1607,10 +1894,25 @@ class TowAutoApp(tk.Tk):
                 if run_idx < total_run - 1 and not self.stop_event.is_set():
                     rest_time = 5.0 if run_idx >= 1 else 2.0
                     self.log(f'Nghỉ {rest_time:.0f} giây trước tài khoản tiếp theo...')
-                    if not fast_mode:
-                        time.sleep(rest_time)
+                    delay_start = time.time()
+                    while time.time() - delay_start < rest_time:
+                        if self.stop_event.is_set():
+                            break
+                        if not self.pause_event.is_set():
+                            while not self.pause_event.is_set():
+                                if self.stop_event.is_set() or self.skip_step_event.is_set():
+                                    break
+                                time.sleep(0.05)
+                        if self.skip_step_event.is_set():
+                            self.skip_step_event.clear()
+                            self.log('⏩ [Phím tắt Ctrl+S] Đã bỏ qua thời gian nghỉ giữa các tài khoản!')
+                            break
+                        time.sleep(0.2)
 
         self.log(f'🏁 TIẾN TRÌNH [{tab_name}] ĐÃ KẾT THÚC.')
+        self.is_running = False
+        self.is_paused = False
+        self.pause_event.set()
         def _finish():
             if hasattr(self, 'btn_start_login'): self.btn_start_login.config(state='normal')
             if hasattr(self, 'btn_start_clone'): self.btn_start_clone.config(state='normal')

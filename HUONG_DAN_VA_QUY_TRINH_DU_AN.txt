@@ -56,7 +56,15 @@
 
 - run_tool.bat:
   + Phím tắt khởi động nhanh Tool chỉ với 1 cú nhấp chuột.
-  + Tự động nhận diện Python 3.11 ngay cả khi chưa thêm vào PATH hệ thống.
+  + Tự động kiểm tra và kích hoạt cài đặt thư viện còn thiếu trước khi khởi chạy.
+  + Tự động nhận diện Python (3.10+) ngay cả khi chưa thêm vào PATH hệ thống.
+
+- cai_dat_thu_vien.bat & install_requirements.bat:
+  + Chương trình tự động kiểm tra và cài đặt toàn bộ các thư viện cần thiết (OpenCV, PyAutoGUI, Pillow, Pyperclip, PyWin32, WinOCR, NumPy).
+  + Tự động nâng cấp pip và cài đặt từ PyPI dự phòng nếu gặp lỗi mạng.
+
+- install_requirements.py & requirements.txt:
+  + Script Python và tệp cấu hình danh sách các gói phụ thuộc cần thiết cho Tool.
 
 - HUONG_DAN_VA_QUY_TRINH_DU_AN.txt:
   + Tài liệu tổng kết quy trình và hướng dẫn chi tiết của dự án.
