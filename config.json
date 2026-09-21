@@ -1,7 +1,9 @@
 {
   "game_dir": "C:\\ToWRR",
   "enable_logout_delay": true,
-  "logout_delay": 3.0,
+  "logout_delay": 5.0,
   "enable_open_delay": true,
-  "open_delay": 7.0
+  "open_delay": 10.0,
+  "enable_char_delay": true,
+  "char_delay": 10.0
 }

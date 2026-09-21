@@ -40,6 +40,8 @@ class TowAutoApp(tk.Tk):
         self.logout_delay = 5.0
         self.enable_open_delay = True
         self.open_delay = 5.0
+        self.enable_char_delay = True
+        self.char_delay = 5.0
         self.launch_mode = None
         
         self.load_data()
@@ -209,6 +211,24 @@ class TowAutoApp(tk.Tk):
         self.var_tile_login = tk.BooleanVar(value=True)
         chk_tile = tk.Checkbutton(r2, text='|  Tự xếp ngói', variable=self.var_tile_login, bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e')
         chk_tile.pack(side='left', padx=6)
+
+        # Row 3 (ở phía dưới): Chờ danh sách nhân vật
+        r3 = tk.Frame(opts_frame, bg='#1e1e2e')
+        r3.pack(anchor='w', pady=2)
+        self.var_char_delay_login = tk.BooleanVar(value=self.enable_char_delay)
+        chk_char_delay_login = tk.Checkbutton(
+            r3, text='Chờ danh sách nhân vật:',
+            variable=self.var_char_delay_login, command=self._on_char_delay_toggle_login,
+            bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e'
+        )
+        chk_char_delay_login.pack(side='left', padx=3)
+
+        spn_char_state = 'normal' if self.enable_char_delay else 'disabled'
+        self.spn_char_delay_login = tk.Spinbox(r3, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_char_state)
+        self.spn_char_delay_login.delete(0, 'end')
+        self.spn_char_delay_login.insert(0, str(int(self.char_delay)))
+        self.spn_char_delay_login.pack(side='left', padx=2)
+        tk.Label(r3, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 8))
         
         self.btn_start_login = ttk.Button(btn_frame, text='▶ BẮT ĐẦU AUTO LOGIN', style='Green.TButton', command=lambda: self.start_automation(mode='login'))
         self.btn_start_login.pack(side='left', padx=5)
@@ -351,6 +371,24 @@ class TowAutoApp(tk.Tk):
         self.var_tile_clone = tk.BooleanVar(value=True)
         chk_tile = tk.Checkbutton(r2, text='|  Tự xếp ngói', variable=self.var_tile_clone, bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e')
         chk_tile.pack(side='left', padx=6)
+
+        # Row 3 (ở phía dưới): Chờ danh sách nhân vật
+        r3 = tk.Frame(opts_frame, bg='#1e1e2e')
+        r3.pack(anchor='w', pady=2)
+        self.var_char_delay_clone = tk.BooleanVar(value=self.enable_char_delay)
+        chk_char_delay_clone = tk.Checkbutton(
+            r3, text='Chờ danh sách nhân vật:',
+            variable=self.var_char_delay_clone, command=self._on_char_delay_toggle_clone,
+            bg='#1e1e2e', fg='#cdd6f4', selectcolor='#313244', activebackground='#1e1e2e'
+        )
+        chk_char_delay_clone.pack(side='left', padx=3)
+
+        spn_char_state_c = 'normal' if self.enable_char_delay else 'disabled'
+        self.spn_char_delay_clone = tk.Spinbox(r3, from_=1, to=30, width=3, bg='#313244', fg='#ffffff', state=spn_char_state_c)
+        self.spn_char_delay_clone.delete(0, 'end')
+        self.spn_char_delay_clone.insert(0, str(int(self.char_delay)))
+        self.spn_char_delay_clone.pack(side='left', padx=2)
+        tk.Label(r3, text='s', bg='#1e1e2e', fg='#a6adc8').pack(side='left', padx=(0, 6))
         
         self.btn_start_clone = ttk.Button(btn_frame, text='▶ BẮT ĐẦU MULTI CLONE', style='Green.TButton', command=lambda: self.start_automation(mode='clone'))
         self.btn_start_clone.pack(side='left', padx=5)
@@ -571,6 +609,28 @@ class TowAutoApp(tk.Tk):
             self.spn_open_delay_clone.config(state=state)
         self.save_data()
 
+    def _on_char_delay_toggle_login(self):
+        enabled = self.var_char_delay_login.get()
+        if hasattr(self, 'var_char_delay_clone'):
+            self.var_char_delay_clone.set(enabled)
+        state = 'normal' if enabled else 'disabled'
+        if hasattr(self, 'spn_char_delay_login'):
+            self.spn_char_delay_login.config(state=state)
+        if hasattr(self, 'spn_char_delay_clone'):
+            self.spn_char_delay_clone.config(state=state)
+        self.save_data()
+
+    def _on_char_delay_toggle_clone(self):
+        enabled = self.var_char_delay_clone.get()
+        if hasattr(self, 'var_char_delay_login'):
+            self.var_char_delay_login.set(enabled)
+        state = 'normal' if enabled else 'disabled'
+        if hasattr(self, 'spn_char_delay_login'):
+            self.spn_char_delay_login.config(state=state)
+        if hasattr(self, 'spn_char_delay_clone'):
+            self.spn_char_delay_clone.config(state=state)
+        self.save_data()
+
     def load_data(self):
         if os.path.exists(CONFIG_FILE):
             try:
@@ -581,6 +641,8 @@ class TowAutoApp(tk.Tk):
                     self.logout_delay = cfg.get('logout_delay', 5.0)
                     self.enable_open_delay = cfg.get('enable_open_delay', True)
                     self.open_delay = cfg.get('open_delay', 5.0)
+                    self.enable_char_delay = cfg.get('enable_char_delay', True)
+                    self.char_delay = cfg.get('char_delay', 5.0)
             except Exception:
                 pass
 
@@ -711,13 +773,33 @@ class TowAutoApp(tk.Tk):
                 except Exception:
                     pass
 
+            char_delay_val = 5.0
+            enable_char_delay = True
+            if hasattr(self, 'var_char_delay_login'):
+                enable_char_delay = self.var_char_delay_login.get()
+            elif hasattr(self, 'var_char_delay_clone'):
+                enable_char_delay = self.var_char_delay_clone.get()
+
+            if hasattr(self, 'spn_char_delay_login'):
+                try:
+                    char_delay_val = float(self.spn_char_delay_login.get())
+                except Exception:
+                    pass
+            elif hasattr(self, 'spn_char_delay_clone'):
+                try:
+                    char_delay_val = float(self.spn_char_delay_clone.get())
+                except Exception:
+                    pass
+
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump({
                     'game_dir': self.game_dir,
                     'enable_logout_delay': enable_delay,
                     'logout_delay': delay_val,
                     'enable_open_delay': enable_open_delay,
-                    'open_delay': open_delay_val
+                    'open_delay': open_delay_val,
+                    'enable_char_delay': enable_char_delay,
+                    'char_delay': char_delay_val
                 }, f, indent=2)
             with open(ACCOUNTS_LOGIN_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.accounts_login, f, indent=2)
@@ -1730,6 +1812,14 @@ class TowAutoApp(tk.Tk):
                     open_game_delay = float(self.spn_open_delay_clone.get())
                 except Exception:
                     open_game_delay = 5.0
+
+            if hasattr(self, 'var_char_delay_clone') and not self.var_char_delay_clone.get():
+                char_delay = 0.0
+            else:
+                try:
+                    char_delay = float(self.spn_char_delay_clone.get())
+                except Exception:
+                    char_delay = 5.0
             auto_tile = self.var_tile_clone.get() if hasattr(self, 'var_tile_clone') else True
         else:
             concurrency = 1
@@ -1748,6 +1838,14 @@ class TowAutoApp(tk.Tk):
                     open_game_delay = float(self.spn_open_delay_login.get())
                 except Exception:
                     open_game_delay = 5.0
+
+            if hasattr(self, 'var_char_delay_login') and not self.var_char_delay_login.get():
+                char_delay = 0.0
+            else:
+                try:
+                    char_delay = float(self.spn_char_delay_login.get())
+                except Exception:
+                    char_delay = 5.0
             auto_tile = self.var_tile_login.get() if hasattr(self, 'var_tile_login') else True
 
         acc_list = self.get_accounts(mode)
@@ -1803,6 +1901,7 @@ class TowAutoApp(tk.Tk):
                     total_tasks=total_tasks,
                     logout_delay=logout_delay,
                     open_game_delay=open_game_delay,
+                    char_delay=char_delay,
                     step_timeout=30.0,
                     max_retries=2,
                     pause_event=self.pause_event,
@@ -1838,23 +1937,24 @@ class TowAutoApp(tk.Tk):
 
                 base_run_idx += len(selected_clones)
 
-                # Nghỉ giữa các tài khoản
+                # Nghỉ giữa các tài khoản (chỉ áp dụng cho Safe Mode)
                 if grp_idx < len(acc_groups) - 1 and not self.stop_event.is_set():
-                    self.log(f'⏳ Nghỉ 5s trước tài khoản tiếp theo...')
-                    delay_start = time.time()
-                    while time.time() - delay_start < 5.0:
-                        if self.stop_event.is_set():
-                            break
-                        if not self.pause_event.is_set():
-                            while not self.pause_event.is_set():
-                                if self.stop_event.is_set() or self.skip_step_event.is_set():
-                                    break
-                                time.sleep(0.05)
-                        if self.skip_step_event.is_set():
-                            self.skip_step_event.clear()
-                            self.log('⏩ [Phím tắt Ctrl+S] Đã bỏ qua thời gian nghỉ giữa các tài khoản!')
-                            break
-                        time.sleep(0.2)
+                    if not fast_mode:
+                        self.log(f'⏳ Nghỉ 5s trước tài khoản tiếp theo...')
+                        delay_start = time.time()
+                        while time.time() - delay_start < 5.0:
+                            if self.stop_event.is_set():
+                                break
+                            if not self.pause_event.is_set():
+                                while not self.pause_event.is_set():
+                                    if self.stop_event.is_set() or self.skip_step_event.is_set():
+                                        break
+                                    time.sleep(0.05)
+                            if self.skip_step_event.is_set():
+                                self.skip_step_event.clear()
+                                self.log('⏩ [Phím tắt Ctrl+S] Đã bỏ qua thời gian nghỉ giữa các tài khoản!')
+                                break
+                            time.sleep(0.2)
 
         else:
             # Auto Login mode — simple sequential run
@@ -1875,6 +1975,7 @@ class TowAutoApp(tk.Tk):
                     total=total_run,
                     logout_delay=logout_delay,
                     open_game_delay=open_game_delay,
+                    char_delay=char_delay,
                     mode=mode,
                     step_timeout=30.0,
                     max_retries=2,
@@ -1892,22 +1993,23 @@ class TowAutoApp(tk.Tk):
                         self.update_account_status(orig_idx, '❌ Lỗi đăng nhập', mode)
 
                 if run_idx < total_run - 1 and not self.stop_event.is_set():
-                    rest_time = 5.0 if run_idx >= 1 else 2.0
-                    self.log(f'Nghỉ {rest_time:.0f} giây trước tài khoản tiếp theo...')
-                    delay_start = time.time()
-                    while time.time() - delay_start < rest_time:
-                        if self.stop_event.is_set():
-                            break
-                        if not self.pause_event.is_set():
-                            while not self.pause_event.is_set():
-                                if self.stop_event.is_set() or self.skip_step_event.is_set():
-                                    break
-                                time.sleep(0.05)
-                        if self.skip_step_event.is_set():
-                            self.skip_step_event.clear()
-                            self.log('⏩ [Phím tắt Ctrl+S] Đã bỏ qua thời gian nghỉ giữa các tài khoản!')
-                            break
-                        time.sleep(0.2)
+                    if not fast_mode:
+                        rest_time = 5.0 if run_idx >= 1 else 2.0
+                        self.log(f'Nghỉ {rest_time:.0f} giây trước tài khoản tiếp theo...')
+                        delay_start = time.time()
+                        while time.time() - delay_start < rest_time:
+                            if self.stop_event.is_set():
+                                break
+                            if not self.pause_event.is_set():
+                                while not self.pause_event.is_set():
+                                    if self.stop_event.is_set() or self.skip_step_event.is_set():
+                                        break
+                                    time.sleep(0.05)
+                            if self.skip_step_event.is_set():
+                                self.skip_step_event.clear()
+                                self.log('⏩ [Phím tắt Ctrl+S] Đã bỏ qua thời gian nghỉ giữa các tài khoản!')
+                                break
+                            time.sleep(0.2)
 
         self.log(f'🏁 TIẾN TRÌNH [{tab_name}] ĐÃ KẾT THÚC.')
         self.is_running = False
