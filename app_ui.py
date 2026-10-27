@@ -116,11 +116,23 @@ class TowAutoApp(tk.Tk):
         title_lbl = tk.Label(header, text='⚔️ Tales of Wind Auto-Login & Multi-Clone', font=('Segoe UI', 15, 'bold'), fg='#89b4fa', bg='#11111b')
         title_lbl.pack(side='left')
         
+        self.btn_tile_tabs = tk.Button(
+            header,
+            text='🪟 Xếp ngói tab Game',
+            command=self.tile_all_game_tabs,
+            bg='#a6e3a1',
+            fg='#11111b',
+            relief='flat',
+            font=('Segoe UI', 9, 'bold'),
+            cursor='hand2'
+        )
+        self.btn_tile_tabs.pack(side='right', padx=(10, 5))
+
+        btn_browse = tk.Button(header, text='📁 Chọn thư mục Game', command=self.choose_game_dir, bg='#313244', fg='#cdd6f4', relief='flat', font=('Segoe UI', 9), cursor='hand2')
+        btn_browse.pack(side='right', padx=5)
+
         self.lbl_game_info = tk.Label(header, text=f'📁 Thư mục Game: {self.game_dir}', font=('Segoe UI', 10), fg='#a6adc8', bg='#11111b')
         self.lbl_game_info.pack(side='right', padx=10)
-        
-        btn_browse = tk.Button(header, text='📁 Chọn thư mục Game', command=self.choose_game_dir, bg='#313244', fg='#cdd6f4', relief='flat', font=('Segoe UI', 9))
-        btn_browse.pack(side='right', padx=5)
 
         # 2. Main Split (Top: Notebook tabs, Bottom: Shared Log console)
         self.main_paned = tk.PanedWindow(self, orient='vertical', bg='#181825', sashwidth=4)
@@ -818,6 +830,23 @@ class TowAutoApp(tk.Tk):
             if hasattr(self, 'lbl_game_info'):
                 self.lbl_game_info.config(text=f'📁 Thư mục Game: {self.game_dir}')
             self.log(f'Đã đặt thư mục game: {self.game_dir}')
+
+    def tile_all_game_tabs(self):
+        """Xếp ngói tất cả các tab game ToW đang mở hiện tại."""
+        def _worker():
+            try:
+                count = automation.tile_all_game_windows(logger=self.log)
+                if count == 0:
+                    self.after(0, lambda: messagebox.showinfo(
+                        'Xếp ngói tab Game',
+                        'Không tìm thấy tab game Tales of Wind nào đang mở trên màn hình!\n\n(Lưu ý: Tính năng chỉ sắp xếp các tab game ToW, không ảnh hưởng đến các ứng dụng khác).'
+                    ))
+                else:
+                    self.after(100, lambda: self.lift())
+            except Exception as e:
+                self.log(f'❌ Lỗi khi xếp ngói tab game: {e}')
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def refresh_table(self, mode=None):
         modes = ['login', 'clone'] if mode is None else [mode]

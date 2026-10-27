@@ -306,6 +306,142 @@ def tile_window(hwnd, index, total=4):
     except Exception:
         pass
 
+# ==============================================================================
+# CHỨC NĂNG TÁCH RIÊNG: XẾP NGÓI CÁC TAB GAME ĐANG MỞ HIỆN TẠI (BUTTON THỦ CÔNG)
+# ==============================================================================
+
+def is_game_tab_window_for_manual_tile(hwnd):
+    """
+    Kiểm tra CHÍNH XÁC một cửa sổ có phải là tab game ToW hay không (dành riêng cho nút xếp ngói thủ công).
+    Chỉ nhận diện ToW.exe / UnityWndClass, loại trừ tuyệt đối Tool và các ứng dụng khác.
+    """
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return False
+    if not (win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd)):
+        return False
+    if win32gui.GetParent(hwnd) != 0:
+        return False
+    try:
+        style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+        if style & win32con.WS_CHILD:
+            return False
+    except Exception:
+        return False
+
+    title = win32gui.GetWindowText(hwnd)
+    if not title:
+        return False
+
+    # Loại trừ chính Tool
+    if 'Tales of Wind - Auto-Login' in title:
+        return False
+
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if not pid or pid == os.getpid():
+            return False
+    except Exception:
+        return False
+
+    # Kiểm tra tên tiến trình
+    exe_name = ''
+    try:
+        h_proc = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        buf = ctypes.create_unicode_buffer(1024)
+        size = ctypes.c_ulong(1024)
+        ctypes.windll.kernel32.QueryFullProcessImageNameW(int(h_proc), 0, buf, ctypes.byref(size))
+        win32api.CloseHandle(h_proc)
+        exe_name = os.path.basename(buf.value).lower()
+    except Exception:
+        pass
+
+    if exe_name:
+        if exe_name in ('tow.exe', 'towrr_launcher.exe') or 'tow' in exe_name:
+            return True
+        return False
+
+    try:
+        class_name = win32gui.GetClassName(hwnd)
+    except Exception:
+        class_name = ''
+
+    if class_name == 'UnityWndClass' and ('tow' in title.lower() or 'tales of wind' in title.lower()):
+        return True
+
+    return False
+
+def find_game_tabs_for_manual_tile():
+    """Tìm danh sách tất cả các tab game ToW đang mở để phục vụ nút xếp ngói thủ công."""
+    result = []
+    def enum_cb(hwnd, extra):
+        if is_game_tab_window_for_manual_tile(hwnd):
+            result.append(hwnd)
+        return True
+    win32gui.EnumWindows(enum_cb, None)
+    return result
+
+def tile_all_open_games_manual(logger=print):
+    """
+    Hàm TÁCH RIÊNG chuyên dụng cho nút bấm 'Xếp ngói tab Game'.
+    Tự động quét các tab game ToW đang mở hiện tại và xếp ngói gọn gàng.
+    Hoàn toàn độc lập, không làm ảnh hưởng đến chức năng 'Tự xếp ngói' của luồng Auto Login.
+    """
+    def _safe_log(msg):
+        if not logger:
+            return
+        try:
+            logger(msg)
+        except Exception:
+            try:
+                clean_msg = msg.encode('ascii', errors='replace').decode('ascii')
+                logger(clean_msg)
+            except Exception:
+                pass
+
+    hwnds = find_game_tabs_for_manual_tile()
+    if not hwnds:
+        _safe_log("⚠️ Không tìm thấy tab game nào đang mở để xếp ngói.")
+        return 0
+
+    # Sắp xếp các tab theo PID tăng dần để giữ vị trí cố định
+    def get_sort_key(h):
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(h)
+            return pid
+        except Exception:
+            return h
+    hwnds.sort(key=get_sort_key)
+
+    total = len(hwnds)
+    screen_w, screen_h = pyautogui.size()
+    avail_h = screen_h - 40
+    cols = 2 if total <= 4 else (3 if total <= 9 else 4)
+    rows = (total + cols - 1) // cols
+    w = screen_w // cols
+    h = avail_h // rows
+
+    _safe_log(f"🪟 Bắt đầu tự xếp ngói {total} tab game ({cols} cột x {rows} hàng)...")
+
+    for idx, hwnd in enumerate(hwnds):
+        c = idx % cols
+        r = idx // cols
+        x = c * w
+        y = r * h
+        try:
+            with ACTION_LOCK:
+                if win32gui.IsIconic(hwnd) or win32gui.IsZoomed(hwnd):
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.MoveWindow(hwnd, x, y, w, h, True)
+                win32gui.BringWindowToTop(hwnd)
+        except Exception:
+            pass
+
+    _safe_log(f"✅ Đã xếp ngói thành công {total} tab game!")
+    return total
+
+# Alias tương thích
+tile_all_game_windows = tile_all_open_games_manual
+
 class StepTimeoutException(Exception):
     """Ném ra khi một bước quá thời gian chờ (game bị lag hoặc không xuất hiện bước tiếp theo)."""
     def __init__(self, message, proc=None, pid=None, hwnd=None):
@@ -732,8 +868,15 @@ async def _async_ocr_left_panel(left_bgr):
         res = await winocr.recognize_pil(pil_img, 'en')
         words_info = []
         for line in res.lines:
+            # Nếu một dòng có nhiều từ, bổ sung cả dòng đầy đủ vào candidate
+            if line.text and len(line.words) > 1:
+                lx = int(min(w.bounding_rect.x for w in line.words))
+                ly = int(min(w.bounding_rect.y for w in line.words))
+                lr = int(max(w.bounding_rect.x + w.bounding_rect.width for w in line.words))
+                lb = int(max(w.bounding_rect.y + w.bounding_rect.height for w in line.words))
+                words_info.append((line.text, lx, ly, lr - lx, lb - ly))
             for word in line.words:
-                words_info.append((word.text, word.bounding_rect.x, word.bounding_rect.y, word.bounding_rect.width, word.bounding_rect.height))
+                words_info.append((word.text, int(word.bounding_rect.x), int(word.bounding_rect.y), int(word.bounding_rect.width), int(word.bounding_rect.height)))
         return words_info
     except Exception:
         return []
@@ -756,9 +899,17 @@ def ocr_left_panel_sync(left_bgr):
 def ocr_character_panel_variants(left_bgr):
     """OCR nhiều biến thể ảnh để tăng độ ổn định khi nền game làm mờ tên."""
     height, width = left_bgr.shape[:2]
-    variants = [left_bgr]
+    # variants: list of (image, offset_x, offset_y)
+    variants = [(left_bgr, 0, 0)]
     enlarged = cv2.resize(left_bgr, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-    variants.append(enlarged)
+    variants.append((enlarged, 0, 0))
+
+    # Cắt riêng cột tên nhân vật (bỏ qua cột avatar bên trái để loại bỏ nhiễu icon/level)
+    text_col_x = int(width * 0.22)
+    if text_col_x < width - 20:
+        text_crop = left_bgr[:, text_col_x:]
+        text_enlarged = cv2.resize(text_crop, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        variants.append((text_enlarged, text_col_x, 0))
 
     gray = cv2.cvtColor(left_bgr, cv2.COLOR_BGR2GRAY)
     contrast = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
@@ -766,25 +917,150 @@ def ocr_character_panel_variants(left_bgr):
         contrast, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY, 31, 9,
     )
-    variants.append(cv2.cvtColor(thresholded, cv2.COLOR_GRAY2BGR))
+    variants.append((cv2.cvtColor(thresholded, cv2.COLOR_GRAY2BGR), 0, 0))
 
     words = []
-    for variant in variants:
-        scale_x = width / variant.shape[1]
-        scale_y = height / variant.shape[0]
+    seen = set()
+    for variant, offset_x, offset_y in variants:
+        v_h, v_w = variant.shape[:2]
+        orig_w = width - offset_x
+        orig_h = height - offset_y
+        scale_x = orig_w / v_w
+        scale_y = orig_h / v_h
         for text, bx, by, bw, bh in ocr_left_panel_sync(variant):
-            words.append((
-                text,
-                int(bx * scale_x), int(by * scale_y),
-                int(bw * scale_x), int(bh * scale_y),
-            ))
+            gx = int(bx * scale_x) + offset_x
+            gy = int(by * scale_y) + offset_y
+            gw = int(bw * scale_x)
+            gh = int(bh * scale_y)
+            # Khử trùng lặp cùng text ở vị trí tương đương
+            key = (text.strip().lower(), gx // 8, gy // 8)
+            if key not in seen:
+                seen.add(key)
+                words.append((text, gx, gy, gw, gh))
     return words
+
+def match_character_name_score(candidate_text, target_char):
+    """
+    Tính điểm khớp giữa chuỗi OCR nhận diện được và tên nhân vật cần tìm (target_char).
+    Hỗ trợ phát hiện tên nhân vật bên trong một cụm OCR (ví dụ: 'I-Pavlova', 'I—Pavlova',
+    '文_Pavlova', 'EPavlova', '1_Pavlova', '[Guild]Pavlova', 'loyal 21', v.v.)
+    """
+    if not candidate_text or not target_char:
+        return 0
+
+    t_raw = target_char.strip().lower()
+    c_raw = candidate_text.strip().lower()
+
+    # Bỏ qua các nút điều khiển hoặc chữ hệ thống
+    if any(b in c_raw for b in ['back', 'ack', 'exit', 'start', 'adventure', 'delete']):
+        return 0
+
+    t_clean = re.sub(r'[^a-z0-9]', '', t_raw)
+    c_clean = re.sub(r'[^a-z0-9]', '', c_raw)
+    if not t_clean or not c_clean:
+        return 0
+
+    # Hàm chuẩn hóa các ký tự OCR thường bị nhầm lẫn
+    def normalize_ocr(s):
+        return (s.replace('l', '1')
+                 .replace('i', '1')
+                 .replace('|', '1')
+                 .replace('o', '0')
+                 .replace('z', '2')
+                 .replace('s', '5')
+                 .replace('u', 'v'))
+
+    t_norm = normalize_ocr(t_clean)
+    c_norm = normalize_ocr(c_clean)
+
+    # 1. Khớp hoàn toàn chuỗi đã làm sạch
+    if t_clean == c_clean:
+        return 100
+
+    # Tách cụm thành các token con theo ký tự phân tách (_, -, —, –, |, khoảng trắng, ngoặc, v.v.)
+    tokens = [re.sub(r'[^a-z0-9]', '', tok) for tok in re.split(r'[^a-zA-Z0-9]+', c_raw) if tok]
+    tokens = [tok for tok in tokens if tok]
+
+    # Kiểm tra số trong target_char nếu có (ví dụ: 'loyal21' thì số là '21')
+    t_digits = re.findall(r'\d+', t_clean)
+
+    # 2. Khớp chính xác 1 token bên trong cụm (ví dụ 'Pavlova' trong 'I—Pavlova' hoặc 'I-Pavlova')
+    for tok in tokens:
+        if tok == t_clean:
+            return 99
+
+    # 3. Chuẩn hóa OCR (nhầm 'l'/'1'/'i', 'o'/'0', v.v.)
+    if t_norm == c_norm:
+        return 96
+
+    for tok in tokens:
+        tok_norm = normalize_ocr(tok)
+        if tok_norm == t_norm:
+            tok_digits = re.findall(r'\d+', tok)
+            if t_digits and tok_digits and t_digits != tok_digits:
+                continue
+            return 95
+
+    # 4. Kiểm tra target là phần đuôi hoặc phần đầu của cụm (loại bỏ icon class / rác OCR đầu chuỗi)
+    # Ví dụ: 'ipavlova'.endswith('pavlova') hoặc 'epavlova'.endswith('pavlova')
+    if c_clean.endswith(t_clean) or c_clean.startswith(t_clean):
+        c_digits = re.findall(r'\d+', c_clean)
+        if not (t_digits and c_digits and t_digits != c_digits):
+            ratio = len(t_clean) / len(c_clean)
+            return int(90 + 7 * ratio)
+
+    if c_norm.endswith(t_norm) or c_norm.startswith(t_norm):
+        c_digits = re.findall(r'\d+', c_clean)
+        if not (t_digits and c_digits and t_digits != c_digits):
+            ratio = len(t_norm) / len(c_norm)
+            return int(88 + 6 * ratio)
+
+    # 5. Khớp chuỗi con (substring match): target nằm bên trong candidate
+    if t_clean in c_clean:
+        c_digits = re.findall(r'\d+', c_clean)
+        if not (t_digits and c_digits and t_digits != c_digits):
+            ratio = len(t_clean) / len(c_clean)
+            return int(85 + 7 * ratio)
+
+    if t_norm in c_norm:
+        c_digits = re.findall(r'\d+', c_clean)
+        if not (t_digits and c_digits and t_digits != c_digits):
+            ratio = len(t_norm) / len(c_norm)
+            return int(82 + 6 * ratio)
+
+    # 6. So khớp tương đồng (Fuzzy matching)
+    best_fuzzy = 0.0
+    for tok in [c_clean] + tokens:
+        tok_norm = normalize_ocr(tok)
+        tok_digits = re.findall(r'\d+', tok)
+        if t_digits and tok_digits and t_digits != tok_digits:
+            continue
+        r = difflib.SequenceMatcher(None, t_norm, tok_norm).ratio()
+        if r > best_fuzzy:
+            best_fuzzy = r
+
+    # Cửa sổ trượt (sliding window) nếu candidate dài hơn target
+    if len(c_norm) > len(t_norm):
+        t_len = len(t_norm)
+        for i in range(len(c_norm) - t_len + 1):
+            sub = c_norm[i:i + t_len]
+            r = difflib.SequenceMatcher(None, t_norm, sub).ratio()
+            if r > best_fuzzy:
+                best_fuzzy = r
+
+    if best_fuzzy >= 0.78:
+        if t_digits:
+            if not all(d in c_clean for d in t_digits):
+                return 0
+        return int(70 + 10 * best_fuzzy)
+
+    return 0
 
 def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logger=print, stop_event=None, extra_delay=0.0, force_real_delay=False):
     """
     Ở màn hình chọn nhân vật (Character Selection Screen):
-    1. Quét danh sách nhân vật ở bên trái cửa sổ.
-    2. Tìm đúng tên nhân vật (ví dụ loyal21, loyal29, loyal25...).
+    1. Quét danh sách nhân vật ở bên trái cửa sổ bằng OCR đa biến thể.
+    2. Phân tích các cụm từ quét được, tách token và khớp linh hoạt với tên nhân vật (ví dụ: Pavlova trong 'I—Pavlova').
     3. Nhấp vào AVATAR kế bên tên nhân vật đó để chọn nhân vật.
     4. Chờ nhân vật được kích hoạt trước khi ấn Start Adventure.
     """
@@ -804,7 +1080,7 @@ def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logge
             logger(f'[{email}] ⚠️ Không thể chụp ảnh để tìm avatar nhân vật.')
             return False
 
-        # Tên nhân vật nằm bên phải avatar; lấy rộng hơn để không cắt mất "loyal4".
+        # Tên nhân vật nằm bên phải avatar; lấy rộng hơn để không cắt mất tên dài
         left_w = int(ww * 0.45)
         left_bgr = img_bgr[0:wh, 0:left_w]
         words = ocr_character_panel_variants(left_bgr)
@@ -819,11 +1095,17 @@ def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logge
     best_y = None
 
     t_name = (target_char or '').strip().lower().replace(' ', '')
-    t_clean = re.sub(r'[^a-z0-9]', '', t_name)
 
-    # OCR đôi khi tách tên thành hai token cùng một dòng, ví dụ "loyal" + "4".
-    # Ghép các token gần nhau để so khớp đúng tên hiển thị trong game.
+    # 1. Bổ sung các cụm từ nguyên bản và token con được tách ra từ cụm
     ocr_candidates = list(words)
+    for text, bx, by, bw, bh in words:
+        sub_tokens = [tok for tok in re.split(r'[^a-zA-Z0-9]+', text) if tok]
+        if len(sub_tokens) > 1:
+            for sub in sub_tokens:
+                ocr_candidates.append((sub, bx, by, bw, bh))
+
+    # 2. OCR đôi khi tách tên thành hai token cùng một dòng, ví dụ "loyal" + "4".
+    # Ghép các token gần nhau cùng hàng để so khớp đầy đủ.
     sorted_words = sorted(words, key=lambda item: (item[2], item[1]))
     for first, second in zip(sorted_words, sorted_words[1:]):
         first_text, first_x, first_y, first_w, first_h = first
@@ -835,50 +1117,28 @@ def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logge
             abs(first_center_y - second_center_y) <= max(first_h, second_h) * 0.8 and
             -5 <= horizontal_gap <= max(first_h, second_h) * 2.0
         ):
-            ocr_candidates.append((
-                f'{first_text}{second_text}',
-                first_x,
-                min(first_y, second_y),
-                second_x + second_w - first_x,
-                max(first_h, second_h),
-            ))
+            comb_w = second_x + second_w - first_x
+            comb_h = max(first_h, second_h)
+            ocr_candidates.append((f'{first_text}{second_text}', first_x, min(first_y, second_y), comb_w, comb_h))
+            ocr_candidates.append((f'{first_text} {second_text}', first_x, min(first_y, second_y), comb_w, comb_h))
 
     for text, bx, by, bw, bh in ocr_candidates:
-        # Bỏ qua nút Back hoặc chữ điều khiển
-        if any(b in text.lower() for b in ['back', 'ack', 'exit']):
-            continue
-        
-        # Tính điểm khớp tên nhân vật
-        s = 0
-        o_clean = re.sub(r'[^a-z0-9]', '', text.lower())
-        if t_name and not t_name.startswith('clone'):
-            o_tokens = re.findall(r'[a-z]+\d+', text.lower())
-            if t_clean == o_clean or t_clean in [re.sub(r'[^a-z0-9]', '', token) for token in o_tokens]:
-                s = 100
-            else:
-                t_norm = t_clean.replace('l', '1').replace('i', '1').replace('o', '0').replace('z', '2')
-                o_norm = o_clean.replace('l', '1').replace('i', '1').replace('o', '0').replace('z', '2')
-                if t_norm == o_norm:
-                    s = 90
-                elif (
-                    re.search(r'\d+', t_clean).group() in o_clean and
-                    difflib.SequenceMatcher(None, t_norm, o_norm).ratio() >= 0.78
-                ):
-                    s = 80
-        
+        s = match_character_name_score(text, target_char)
         if s > best_score:
             best_score = s
             best_word = text
             best_y = int(by + bh / 2)
+            if best_score >= 100:
+                break
 
     # 5 vị trí avatar mặc định theo tỉ lệ chiều cao cửa sổ nếu OCR không khớp
     # Avatar 1: ~9.8%, Avatar 2: ~23.7%, Avatar 3: ~37.8%, Avatar 4: ~51.8%, Avatar 5: ~65.8%
     fallback_y_ratios = [0.098, 0.237, 0.378, 0.518, 0.658]
     avatar_x = wx + int(ww * 0.073)
 
-    if best_y is not None and best_score > 0:
+    if best_y is not None and best_score >= 70:
         click_y = wy + best_y
-        logger(f'[{email}] 🎯 Tìm thấy tên [{target_char}] (khớp với "{best_word}"). Đang nhấp vào Avatar kế bên tại ({avatar_x}, {click_y})...')
+        logger(f'[{email}] 🎯 Tìm thấy tên [{target_char}] (khớp với "{best_word}", điểm={best_score}). Đang nhấp vào Avatar kế bên tại ({avatar_x}, {click_y})...')
         click_coords(
             avatar_x, click_y, delay=1.2, hwnd=hwnd, extra_delay=extra_delay,
             force_real_delay=force_real_delay,
@@ -894,9 +1154,9 @@ def select_character_avatar_in_list(hwnd, email, target_char, clone_idx=0, logge
         )
     else:
         if words:
-            ocr_words = ', '.join(text for text, _, _, _, _ in words)
+            ocr_words = ', '.join(f'"{text}"' for text, _, _, _, _ in words)
             logger(f'[{email}] 🔎 OCR danh sách nhân vật: [{ocr_words}]')
-        logger(f'[{email}] ❌ Không tìm thấy clone [{target_char}] trên danh sách nhân vật.')
+        logger(f'[{email}] ❌ Không tìm thấy clone [{target_char}] trên danh sách nhân vật (Điểm cao nhất: {best_score}).')
         return False
 
     if force_real_delay:
